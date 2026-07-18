@@ -25,10 +25,10 @@ Runnable CLI commands today (they only touch config + storage, no MongoDB):
   (`--retain-recent`, `--before-date`, `--prune-failed`, `--prune-unsafe`), with
   `--dry-run`.
 
-Feature-complete as **library drivers** (fully implemented and unit-tested
-against an in-memory MongoDB), pending the concrete `mongodb`-crate adapter
-before they can run against a live server from the CLI — see
-[`.spectial/regeneration-gaps.md`](.spectial/regeneration-gaps.md):
+Feature-complete as **library drivers** — implemented, unit-tested against an
+in-memory MongoDB, and exercised end-to-end against a **real MongoDB** via the
+`mongo`-feature integration tests. (Not yet wired as CLI subcommands — they are
+used programmatically and from the integration tests.)
 
 - **Dump** — logical dump with collection filters, inline BSON binary,
   index/option capture, optional gzip, transformations + subsetting applied
@@ -50,10 +50,10 @@ before they can run against a live server from the CLI — see
 - **Storage**: local directory (always compiled); **S3** (`aws-sdk-s3`),
   **Azure Blob** (`azure_storage_blobs`), **SFTP** (`ssh2`) behind optional cargo
   features (`s3`, `azure`, `ssh`).
-- **MongoDB** access sits behind `MongoSource` / `MongoSink` traits with an
-  in-memory implementation used by the tests. A concrete adapter backed by the
-  real `mongodb` crate (behind the optional `mongo` feature) is a documented
-  extension point that this regeneration did not implement — see
+- **MongoDB** access sits behind `MongoSource` / `MongoSink` traits with two
+  implementations: an in-memory fake used by the unit tests, and a real
+  `MongoDriver` backed by the `mongodb` crate (behind the optional `mongo`
+  feature), covered by live integration tests. See
   [`.spectial/regeneration-gaps.md`](.spectial/regeneration-gaps.md).
 
 ## Install
@@ -105,7 +105,17 @@ cargo test
 ```
 
 (94 tests, all green. The optional backends additionally compile-check with
-`cargo check --features s3`, `--features azure`, `--features ssh`, `--features mongo`.)
+`cargo check --features s3`, `--features azure`, `--features ssh`.)
+
+The real MongoDB adapter has live integration tests. With a MongoDB reachable
+(`docker run -d -p 27017:27017 mongo:7`):
+
+```sh
+cargo test --features mongo            # 94 unit + 4 integration tests
+```
+
+The URI defaults to `mongodb://localhost:27017`, overridable via
+`LEAFMASK_MONGO_URI`.
 
 ## Build for production
 

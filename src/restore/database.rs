@@ -148,6 +148,11 @@ impl<'a> Restore<'a> {
         report: &mut RestoreReport,
     ) -> Result<()> {
         for idx in indexes {
+            // The default `_id_` index is created automatically with the
+            // collection and cannot be (re)declared explicitly.
+            if idx.name == "_id_" {
+                continue;
+            }
             if self.options.include_index(&idx.name) {
                 self.sink.create_index(db, coll, idx)?;
                 report.indexes_created += 1;

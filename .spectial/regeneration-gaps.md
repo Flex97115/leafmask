@@ -18,15 +18,19 @@ skill or the schema.
     (no S3/Azure/SFTP credentials).
 
 - feature: dump.create, restore.database, validate.schema-diff
-  missing: no MongoDB deployment is available in the regeneration environment.
-  assumed: all MongoDB access sits behind `MongoSource` / `MongoSink` traits, and
-    all dump/restore/subset/validate logic is unit-tested against an in-memory
-    fake (`InMemoryMongo`). NOT YET IMPLEMENTED: a concrete adapter backed by the
-    real `mongodb` crate. The `mongo` cargo feature reserves the `mongodb`+`tokio`
-    dependencies for that adapter, but the driver-backed `MongoSource`/`MongoSink`
-    impl is a documented extension point that this regeneration did not write
-    (there was no server to verify it against). This is the one place the port is
-    a stub rather than a faithful implementation.
+  status: RESOLVED — MongoDB access sits behind `MongoSource` / `MongoSink`
+    traits, with two implementations: the in-memory `InMemoryMongo` (backing the
+    unit tests) and the real `MongoDriver` (async `mongodb` crate driven from the
+    sync traits via a Tokio runtime), compiled with the `mongo` feature. The
+    adapter is exercised by live integration tests in `tests/mongo_integration.rs`
+    (dump→drop→restore round trip, duplicate-key error mapping, inline
+    transformation on a real read) run against a real MongoDB.
+  remaining: reads use a plain `find` — point-in-time snapshot sessions require a
+    replica set (a standalone `mongod` rejects them), so the "session snapshot"
+    consistency of `dump.create` is available only against a replica set. The CLI
+    `dump`/`restore`/`validate --data` subcommands are not yet wired to construct
+    a `MongoDriver`; the drivers are used programmatically and via the integration
+    tests.
 
 ## Data-model / behaviour assumptions
 

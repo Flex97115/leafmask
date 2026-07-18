@@ -6,7 +6,7 @@ source:
   extracted_at: "2026-07-18"
 stack:
   - "Rust 2021 (rustc 1.97)"
-  - "MongoDB access behind MongoSource/MongoSink traits (real mongodb-crate adapter behind the optional `mongo` feature)"
+  - "MongoDB access behind MongoSource/MongoSink traits, with a real mongodb-crate adapter (MongoDriver) behind the optional `mongo` feature, covered by live integration tests"
   - "clap (CLI) / serde + serde_yaml (config)"
   - "bson, sha2, flate2, regex, chrono"
   - "Storage: local directory (default); S3 (aws-sdk-s3), Azure Blob, SFTP (ssh2) behind optional cargo features"

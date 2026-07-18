@@ -3,8 +3,8 @@
 //! Dump and restore access MongoDB through these traits rather than a wrapped
 //! `mongodump`/`mongorestore`, so per-document transformation can be applied
 //! inline while streaming. The traits keep the dump/restore logic testable with
-//! an in-memory fake; the real `mongodb`-driver implementation lives behind the
-//! `mongo` cargo feature.
+//! an in-memory fake ([`InMemoryMongo`]); the real `mongodb`-driver
+//! implementation ([`MongoDriver`]) lives behind the `mongo` cargo feature.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -186,5 +186,254 @@ impl MongoSink for InMemoryMongo {
             entry.indexes.push(index.clone());
         }
         Ok(())
+    }
+}
+
+#[cfg(feature = "mongo")]
+pub use driver::MongoDriver;
+
+/// The real MongoDB adapter, backed by the async `mongodb` driver and driven
+/// from the synchronous traits via a dedicated Tokio runtime. Compiled only with
+/// the `mongo` feature.
+///
+/// Note: reads use a plain `find` (point-in-time snapshot sessions require a
+/// replica set); against a replica set this could be upgraded to a snapshot
+/// read concern.
+#[cfg(feature = "mongo")]
+mod driver {
+    use super::*;
+    use crate::error::Error;
+    use mongodb::options::IndexOptions;
+    use mongodb::{Client, IndexModel};
+    use std::future::IntoFuture;
+    use tokio::runtime::Runtime;
+
+    pub struct MongoDriver {
+        client: Client,
+        rt: Runtime,
+    }
+
+    impl MongoDriver {
+        /// Connect to a MongoDB deployment by URI (e.g.
+        /// `mongodb://localhost:27017`).
+        pub fn connect(uri: &str) -> Result<Self> {
+            let rt = Runtime::new().map_err(|e| Error::Mongo(e.to_string()))?;
+            let client = rt
+                .block_on(Client::with_uri_str(uri))
+                .map_err(|e| Error::Mongo(format!("connect: {e}")))?;
+            Ok(MongoDriver { client, rt })
+        }
+
+        fn coll(&self, db: &str, coll: &str) -> mongodb::Collection<Document> {
+            self.client.database(db).collection::<Document>(coll)
+        }
+
+        /// Drop an entire database (used for test isolation and cleanup).
+        pub fn drop_database(&self, db: &str) -> Result<()> {
+            self.rt
+                .block_on(self.client.database(db).drop().into_future())
+                .map_err(|e| Error::Mongo(format!("drop database: {e}")))
+        }
+    }
+
+    impl MongoSource for MongoDriver {
+        fn databases(&self) -> Vec<String> {
+            self.rt
+                .block_on(self.client.list_database_names().into_future())
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|d| !matches!(d.as_str(), "admin" | "config" | "local"))
+                .collect()
+        }
+
+        fn collections(&self, database: &str) -> Vec<String> {
+            self.rt
+                .block_on(
+                    self.client
+                        .database(database)
+                        .list_collection_names()
+                        .into_future(),
+                )
+                .unwrap_or_default()
+        }
+
+        fn read_collection(&self, database: &str, collection: &str) -> Result<CollectionData> {
+            let db = self.client.database(database);
+            let coll = self.coll(database, collection);
+
+            self.rt.block_on(async {
+                // Documents.
+                let mut cursor = coll
+                    .find(Document::new())
+                    .await
+                    .map_err(|e| Error::Mongo(format!("find: {e}")))?;
+                let mut documents = Vec::new();
+                while cursor.advance().await.map_err(|e| Error::Mongo(e.to_string()))? {
+                    documents.push(
+                        cursor
+                            .deserialize_current()
+                            .map_err(|e| Error::Mongo(e.to_string()))?,
+                    );
+                }
+
+                // Indexes.
+                let mut indexes = Vec::new();
+                if let Ok(mut idx_cursor) = coll.list_indexes().await {
+                    while idx_cursor.advance().await.map_err(|e| Error::Mongo(e.to_string()))? {
+                        let model = idx_cursor
+                            .deserialize_current()
+                            .map_err(|e| Error::Mongo(e.to_string()))?;
+                        let keys: Vec<(String, i32)> = model
+                            .keys
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.as_i32().or_else(|| v.as_i64().map(|n| n as i32)).unwrap_or(1)))
+                            .collect();
+                        let name = model
+                            .options
+                            .as_ref()
+                            .and_then(|o| o.name.clone())
+                            .unwrap_or_else(|| default_index_name(&keys));
+                        let unique = model
+                            .options
+                            .as_ref()
+                            .and_then(|o| o.unique)
+                            .unwrap_or(false);
+                        indexes.push(IndexSpec { name, keys, unique });
+                    }
+                }
+
+                // Validator + collection options via listCollections.
+                let (validator, options) = read_options(&db, collection).await?;
+
+                Ok(CollectionData {
+                    database: database.to_string(),
+                    collection: collection.to_string(),
+                    documents,
+                    indexes,
+                    validator,
+                    options,
+                })
+            })
+        }
+    }
+
+    impl MongoSink for MongoDriver {
+        fn ensure_collection(
+            &self,
+            database: &str,
+            collection: &str,
+            validator: &Option<Bson>,
+            options: &BTreeMap<String, Bson>,
+        ) -> Result<()> {
+            let db = self.client.database(database);
+            let mut cmd = bson::doc! { "create": collection };
+            if let Some(v) = validator {
+                cmd.insert("validator", v.clone());
+            }
+            for (k, v) in options {
+                cmd.insert(k.clone(), v.clone());
+            }
+            match self.rt.block_on(db.run_command(cmd).into_future()) {
+                Ok(_) => Ok(()),
+                // NamespaceExists (48) — collection already there, fine.
+                Err(e) if error_code(&e) == Some(48) => Ok(()),
+                Err(e) => Err(Error::Mongo(format!("create collection: {e}"))),
+            }
+        }
+
+        fn insert(
+            &self,
+            database: &str,
+            collection: &str,
+            doc: &Document,
+        ) -> std::result::Result<(), InsertError> {
+            let coll = self.coll(database, collection);
+            match self.rt.block_on(coll.insert_one(doc.clone()).into_future()) {
+                Ok(_) => Ok(()),
+                Err(e) => Err(map_insert_error(&e)),
+            }
+        }
+
+        fn create_index(&self, database: &str, collection: &str, index: &IndexSpec) -> Result<()> {
+            let coll = self.coll(database, collection);
+            let mut keys = Document::new();
+            for (field, dir) in &index.keys {
+                keys.insert(field.clone(), *dir);
+            }
+            let opts = IndexOptions::builder()
+                .name(index.name.clone())
+                .unique(index.unique)
+                .build();
+            let model = IndexModel::builder().keys(keys).options(opts).build();
+            self.rt
+                .block_on(coll.create_index(model).into_future())
+                .map(|_| ())
+                .map_err(|e| Error::Mongo(format!("create index: {e}")))
+        }
+    }
+
+    fn default_index_name(keys: &[(String, i32)]) -> String {
+        keys.iter()
+            .map(|(k, v)| format!("{k}_{v}"))
+            .collect::<Vec<_>>()
+            .join("_")
+    }
+
+    async fn read_options(
+        db: &mongodb::Database,
+        collection: &str,
+    ) -> Result<(Option<Bson>, BTreeMap<String, Bson>)> {
+        let cmd = bson::doc! {
+            "listCollections": 1.0,
+            "filter": { "name": collection },
+        };
+        let result = db
+            .run_command(cmd)
+            .await
+            .map_err(|e| Error::Mongo(format!("listCollections: {e}")))?;
+        let mut validator = None;
+        let mut options = BTreeMap::new();
+        if let Ok(cursor) = result.get_document("cursor") {
+            if let Ok(batch) = cursor.get_array("firstBatch") {
+                if let Some(first) = batch.first().and_then(|b| b.as_document()) {
+                    if let Ok(opts) = first.get_document("options") {
+                        for (k, v) in opts {
+                            if k == "validator" {
+                                validator = Some(v.clone());
+                            } else {
+                                options.insert(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok((validator, options))
+    }
+
+    fn error_code(e: &mongodb::error::Error) -> Option<i32> {
+        use mongodb::error::{ErrorKind, WriteFailure};
+        match e.kind.as_ref() {
+            ErrorKind::Command(cmd) => Some(cmd.code),
+            ErrorKind::Write(WriteFailure::WriteError(we)) => Some(we.code),
+            _ => None,
+        }
+    }
+
+    fn map_insert_error(e: &mongodb::error::Error) -> InsertError {
+        use mongodb::error::{ErrorKind, WriteFailure};
+        let (code, message) = match e.kind.as_ref() {
+            ErrorKind::Write(WriteFailure::WriteError(we)) => {
+                (Some(we.code), we.message.clone())
+            }
+            other => (None, other.to_string()),
+        };
+        // Extract the offending index name from an E11000 message when present.
+        let index_name = message
+            .split("index:")
+            .nth(1)
+            .and_then(|s| s.trim().split_whitespace().next())
+            .map(|s| s.to_string());
+        InsertError { code, index_name }
     }
 }

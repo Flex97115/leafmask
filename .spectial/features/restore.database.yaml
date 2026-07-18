@@ -20,5 +20,6 @@ code:
   - "src/mongo.rs"
   - "src/dump/mod.rs"
 tests:
+  - "tests/mongo_integration.rs"
   - "src/restore/database.rs"
 confidence: medium
