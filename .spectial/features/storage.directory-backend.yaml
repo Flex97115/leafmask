@@ -7,5 +7,8 @@ acceptance:
   - "Dumps written with storage.type=directory land under the configured directory path, one subdirectory per dump ID"
   - "Restoring, listing, and deleting dumps correctly read and modify files under that directory"
 code:
-  - "TBD"
+  - "src/storage/mod.rs"
+  - "src/storage/directory.rs"
+tests:
+  - "src/storage/directory.rs (mod tests)"
 confidence: high
