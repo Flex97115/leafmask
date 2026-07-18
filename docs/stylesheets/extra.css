@@ -1,0 +1,16 @@
+/* Small polish on top of Material. */
+
+.md-typeset .grid.cards > :is(ul, ol) > li,
+.md-typeset .grid > .card {
+  border-radius: 0.4rem;
+}
+
+/* Slightly tighter tables for the parameter references. */
+.md-typeset table:not([class]) th {
+  font-weight: 600;
+}
+
+/* Home page hero spacing. */
+.md-typeset h1 {
+  font-weight: 700;
+}

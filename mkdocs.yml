@@ -1,0 +1,83 @@
+site_name: Leafmask
+site_description: >-
+  Stateless CLI for logical MongoDB dumping, deterministic anonymization,
+  referentially-intact subsetting, and restoration.
+site_url: https://OWNER.github.io/leafmask/
+repo_url: https://github.com/OWNER/leafmask
+repo_name: OWNER/leafmask
+edit_uri: edit/main/docs/
+copyright: Leafmask — Apache-2.0
+
+theme:
+  name: material
+  icon:
+    logo: material/leaf
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: green
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: green
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_css:
+  - stylesheets/extra.css
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting started: getting-started.md
+  - Configuration:
+      - Overview: configuration/index.md
+      - MongoDB connection: configuration/mongodb.md
+      - Storage backends: configuration/storage.md
+      - Transformations: configuration/transformations.md
+      - Subsetting: configuration/subsetting.md
+      - Restore: configuration/restore.md
+  - Transformers: transformers.md
+  - Commands: commands.md
+  - Full config example: config-example.md

@@ -195,6 +195,20 @@ On every push/PR, `.github/workflows/ci.yml` runs `cargo fmt --check`, clippy
 (`-D warnings`, full features), and the test suite including the live MongoDB
 integration tests against a `mongo:7` service container.
 
+## Documentation
+
+Full documentation — installation, a getting-started walkthrough, the complete
+configuration reference, and every transformer — is a MkDocs Material site under
+[`docs/`](docs/), published to GitHub Pages by `.github/workflows/docs.yml`
+(at `https://OWNER.github.io/leafmask/` once the repo is live).
+
+Preview it locally:
+
+```sh
+pip install -r docs/requirements.txt
+mkdocs serve   # http://127.0.0.1:8000
+```
+
 ## Product reference
 
 The feature set, dependency graph, per-feature acceptance criteria, and access
