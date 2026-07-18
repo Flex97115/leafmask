@@ -8,5 +8,7 @@ acceptance:
   - "A warning whose identifier is listed under resolved_warnings in the config is no longer shown on subsequent runs"
   - "With --warnings, all warnings are printed even if they would otherwise be summarized or suppressed"
 code:
-  - "TBD"
+  - "src/validate/warnings.rs"
+tests:
+  - "src/validate/warnings.rs (mod tests)"
 confidence: medium
