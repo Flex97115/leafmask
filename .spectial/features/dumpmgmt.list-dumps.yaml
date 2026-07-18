@@ -11,5 +11,10 @@ acceptance:
   - "Running list-dumps against a storage containing dumps prints each dump's ID and completion status"
   - "An empty storage produces an empty (not erroring) listing"
 code:
-  - "TBD"
+  - "src/dump/mod.rs"
+  - "src/dump/management.rs"
+  - "src/cli.rs"
+tests:
+  - "src/dump/management.rs (mod tests)"
+  - "src/dump/mod.rs (mod tests)"
 confidence: high

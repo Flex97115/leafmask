@@ -12,5 +12,10 @@ acceptance:
   - "Requesting show-dump with 'latest' resolves to the most recently completed dump"
   - "Requesting a nonexistent dump ID fails with a clear error"
 code:
-  - "TBD"
+  - "src/dump/mod.rs"
+  - "src/dump/management.rs"
+  - "src/cli.rs"
+tests:
+  - "src/dump/management.rs (mod tests)"
+  - "src/dump/mod.rs (mod tests)"
 confidence: medium

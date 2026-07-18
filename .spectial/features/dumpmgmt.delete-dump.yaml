@@ -14,5 +14,10 @@ acceptance:
   - "--prune-failed (optionally combined with --prune-unsafe) removes dumps that did not complete successfully"
   - "--dry-run reports exactly what would be deleted without deleting anything"
 code:
-  - "TBD"
+  - "src/dump/mod.rs"
+  - "src/dump/management.rs"
+  - "src/cli.rs"
+tests:
+  - "src/dump/management.rs (mod tests)"
+  - "src/dump/mod.rs (mod tests)"
 confidence: high
