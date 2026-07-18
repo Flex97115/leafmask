@@ -40,3 +40,10 @@ skill or the schema.
     than the full Go template language; the generator set (person, company,
     email, int/float/date/bytes/objectId, noise, masking, regexp, replace,
     set_null, hash) is representative and deterministic, not the full catalog.
+
+- feature: transform.custom-transformers
+  missing: the source command-driver protocol is BSON/length-framed with a
+    metadata handshake.
+  assumed: the command driver exchanges one JSON value per line over
+    stdin/stdout with a persistent process. Declared parameters are surfaced in
+    the catalog but not forwarded to the process handshake.

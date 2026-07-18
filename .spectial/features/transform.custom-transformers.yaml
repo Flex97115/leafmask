@@ -9,5 +9,7 @@ acceptance:
   - "A record that fails to be produced by the external process within the expected exit code causes the transformation (and dump) to fail with a clear error"
   - "Custom transformers appear in the transformer catalog alongside built-in ones and can declare their own typed parameters"
 code:
-  - "TBD"
+  - "src/transform/custom.rs"
+tests:
+  - "src/transform/custom.rs (mod tests)"
 confidence: high
