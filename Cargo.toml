@@ -37,7 +37,9 @@ aws-config = { version = "1", optional = true }
 azure_storage = { version = "0.20", optional = true }
 azure_storage_blobs = { version = "0.20", optional = true }
 futures = { version = "0.3", optional = true }
-ssh2 = { version = "0.9", optional = true }
+# vendored-openssl statically builds OpenSSL, so no system libssl is needed on
+# any target (portable release binaries and a slim runtime image).
+ssh2 = { version = "0.9", optional = true, features = ["vendored-openssl"] }
 
 [features]
 default = []
@@ -45,6 +47,14 @@ mongo = ["dep:mongodb", "dep:tokio"]
 s3 = ["dep:aws-sdk-s3", "dep:aws-config", "dep:tokio"]
 azure = ["dep:azure_storage", "dep:azure_storage_blobs", "dep:tokio", "dep:futures"]
 ssh = ["dep:ssh2"]
+# Everything: what the released binaries and Docker image are built with.
+full = ["mongo", "s3", "azure", "ssh"]
 
 [dev-dependencies]
 tempfile = "3"
+
+# Release binaries: smaller and faster.
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
