@@ -12,5 +12,8 @@ acceptance:
   - "Transformers that generate structured data (person, address, company) can populate multiple related output fields consistently"
   - "An ObjectId-valued field can be deterministically transformed while remaining a valid ObjectId"
 code:
-  - "TBD"
+  - "src/transform/mod.rs"
+  - "src/transform/builtin.rs"
+tests:
+  - "src/transform/builtin.rs (mod tests)"
 confidence: medium

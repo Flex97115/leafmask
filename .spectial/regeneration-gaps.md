@@ -32,3 +32,11 @@ skill or the schema.
   assumed: modelled as structured `field == value -> collection` discriminator
     cases, which covers the documented use of choosing a target collection by a
     type field. A full expression language was not reproduced for this edge.
+
+- feature: transform.builtin-transformers
+  missing: the source ships a Go text/template transformer and a very large
+    faker library (dozens of locale-aware generators).
+  assumed: `template` supports `{{ field }}` document-field substitution rather
+    than the full Go template language; the generator set (person, company,
+    email, int/float/date/bytes/objectId, noise, masking, regexp, replace,
+    set_null, hash) is representative and deterministic, not the full catalog.
