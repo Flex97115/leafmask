@@ -8,5 +8,7 @@ acceptance:
   - "Different salts or seeds produce different output for the same input"
   - "The generator can project a hash into different target ranges/types (int64, bytes) needed by higher-level transformers"
 code:
-  - "TBD"
+  - "src/hash.rs"
+tests:
+  - "src/hash.rs (mod tests)"
 confidence: medium
