@@ -12,5 +12,7 @@ acceptance:
   - "Every command that reads or writes dumps (dump, restore, list-dumps, show-dump, delete, validate --schema) works identically regardless of which backend is configured"
   - "An unsupported or misspelled storage.type value fails fast with a clear error instead of silently defaulting"
 code:
-  - "TBD"
+  - "src/storage/selection.rs"
+tests:
+  - "src/storage/selection.rs (mod tests)"
 confidence: high
