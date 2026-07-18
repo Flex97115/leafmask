@@ -8,5 +8,7 @@ acceptance:
   - "A script can be a raw mongosh command, a path to a script file, or an external command with arguments"
   - "A failing script stops the restore and surfaces the error to the operator"
 code:
-  - "TBD"
+  - "src/restore/scripts.rs"
+tests:
+  - "src/restore/scripts.rs (mod tests)"
 confidence: medium
