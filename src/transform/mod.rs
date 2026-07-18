@@ -10,6 +10,7 @@ pub mod builtin;
 pub mod condition;
 pub mod custom;
 pub mod dynamic;
+pub mod inheritance;
 
 use std::collections::BTreeMap;
 

@@ -7,5 +7,7 @@ acceptance:
   - "A transformer with apply_for_references applies the same deterministic transformation to fields that hold a declared reference to the transformed field, keeping referential values consistent"
   - "A referencing field with its own explicitly configured transformation is not overridden by the inherited one"
 code:
-  - "TBD"
+  - "src/transform/inheritance.rs"
+tests:
+  - "src/transform/inheritance.rs (mod tests)"
 confidence: medium
