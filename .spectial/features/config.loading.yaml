@@ -10,5 +10,7 @@ acceptance:
   - "An unknown key in the config file is rejected as an error rather than silently ignored"
   - "Transformer params, which need special handling due to a known viper lower-casing issue, are parsed correctly regardless of key casing"
 code:
-  - "TBD"
+  - "src/config.rs"
+tests:
+  - "src/config.rs (mod tests)"
 confidence: high
