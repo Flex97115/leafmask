@@ -16,5 +16,7 @@ acceptance:
   - "An invalid --format or --table-format value fails fast with a clear error before any DB work happens"
   - "--strict makes any unresolved validation warning fail the command with a non-zero exit code instead of just printing a warning"
 code:
-  - "TBD"
+  - "src/validate/preview.rs"
+tests:
+  - "src/validate/preview.rs (mod tests)"
 confidence: medium

@@ -150,6 +150,14 @@ impl TransformationPlan {
         Ok(TransformationPlan { collections })
     }
 
+    /// The fields that have a transformer configured for `collection`.
+    pub fn transformed_fields(&self, collection: &str) -> Vec<String> {
+        self.collections
+            .get(collection)
+            .map(|c| c.rules.iter().map(|r| r.field.clone()).collect())
+            .unwrap_or_default()
+    }
+
     /// Whether `doc` from `collection` should be dumped, honouring any custom
     /// query filter. Collections without a filter include everything.
     pub fn should_include(&self, collection: &str, doc: &Document) -> bool {
