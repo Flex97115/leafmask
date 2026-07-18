@@ -13,6 +13,8 @@ acceptance:
   - "A cyclic chain of declared references between collections does not cause an infinite loop or a failed dump"
   - "A polymorphic reference (declared via a reference with polymorphic expressions) is resolved to the correct target collection when subsetting"
 code:
-  - "TBD"
+  - "src/subset/database_subsetting.rs"
+tests:
+  - "src/subset/database_subsetting.rs (mod tests)"
 notes: "Documented as a key product feature (README: 'Database Subsetting')."
 confidence: medium
