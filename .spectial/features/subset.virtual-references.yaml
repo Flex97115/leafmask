@@ -8,5 +8,7 @@ acceptance:
   - "A virtual reference can be marked not_null to affect how strictly the subsetting engine must satisfy it"
   - "A virtual reference with polymorphic_exprs can point to different target collections depending on a discriminator expression"
 code:
-  - "TBD"
+  - "src/subset/virtual_references.rs"
+tests:
+  - "src/subset/virtual_references.rs (mod tests)"
 confidence: medium

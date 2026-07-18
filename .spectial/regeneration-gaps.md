@@ -23,3 +23,12 @@ skill or the schema.
     Dump/restore/subset/validate logic is unit-tested against an in-memory fake
     implementation; the real `mongodb`-crate driver impl is behind the default-off
     `mongo` feature and is not exercised by tests here.
+
+## Data-model / behaviour assumptions
+
+- feature: subset.virtual-references
+  missing: the source expresses polymorphic reference targets as free-form
+    expressions (`polymorphic_exprs`).
+  assumed: modelled as structured `field == value -> collection` discriminator
+    cases, which covers the documented use of choosing a target collection by a
+    type field. A full expression language was not reproduced for this edge.
