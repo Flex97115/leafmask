@@ -158,9 +158,7 @@ fn maybe_config(cli: &Cli) -> crate::Result<Option<crate::config::Config>> {
 /// Load config and open the configured storage backend (required for any
 /// command that reads or writes dumps).
 fn open_storage(cli: &Cli) -> crate::Result<std::sync::Arc<dyn crate::storage::Storage>> {
-    Ok(crate::storage::open_from_config(
-        &require_config(cli)?.storage,
-    )?)
+    crate::storage::open_from_config(&require_config(cli)?.storage)
 }
 
 /// Load the config, erroring clearly if none was provided.

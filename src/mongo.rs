@@ -445,7 +445,7 @@ mod driver {
         let index_name = message
             .split("index:")
             .nth(1)
-            .and_then(|s| s.trim().split_whitespace().next())
+            .and_then(|s| s.split_whitespace().next())
             .map(|s| s.to_string());
         InsertError { code, index_name }
     }

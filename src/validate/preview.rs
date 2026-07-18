@@ -85,6 +85,7 @@ pub struct FieldDiff {
 
 /// Run the preview and render it to a string. `--strict` with any unresolved
 /// warning fails the command.
+#[allow(clippy::too_many_arguments)] // each input is a distinct, unrelated concern
 pub fn preview(
     plan: &TransformationPlan,
     registry: &Registry,

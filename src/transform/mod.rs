@@ -14,12 +14,19 @@ pub mod dynamic;
 pub mod inheritance;
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use bson::{Bson, Document};
+use regex::Regex;
 
 use crate::error::{Error, Result};
 use crate::hash::HashEngine;
 use crate::toolkit::{validate_static, ParamDefinition, ParamValues};
+
+/// Shared `{{ field }}` placeholder pattern used by the built-in and custom
+/// `template` transformers — compiled once.
+pub(crate) static TEMPLATE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{\{\s*\.?(\w+)\s*\}\}").unwrap());
 
 /// Maps a field value to its transformed value. `doc` is the full document, so
 /// a transformer may read sibling fields.

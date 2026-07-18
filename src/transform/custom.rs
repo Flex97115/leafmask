@@ -5,6 +5,7 @@
 //!   * `command` — spawns an executable that exchanges one record per line over
 //!     stdin/stdout (the process is kept alive and streamed to);
 //!   * `template` — a `{{ field }}` template (shares the built-in engine).
+//!
 //! Custom transformers are registered into the same [`Registry`] as built-ins,
 //! so they appear in the catalog and declare their own typed parameters.
 //!
@@ -115,16 +116,16 @@ pub fn register_custom(r: &mut Registry, defs: &[CustomTransformerDef]) -> Resul
                     params,
                     move |_, _| {
                         let template = template.clone();
-                        let re = regex::Regex::new(r"\{\{\s*\.?(\w+)\s*\}\}").unwrap();
                         Ok(Box::new(super::FnTransformer(
                             move |_v: &Bson, doc: &bson::Document| {
-                                let out = re.replace_all(&template, |caps: &regex::Captures| {
-                                    match doc.get(&caps[1]) {
+                                let out = super::TEMPLATE_RE.replace_all(
+                                    &template,
+                                    |caps: &regex::Captures| match doc.get(&caps[1]) {
                                         Some(Bson::String(s)) => s.clone(),
                                         Some(b) => b.to_string(),
                                         None => String::new(),
-                                    }
-                                });
+                                    },
+                                );
                                 Ok(Bson::String(out.into_owned()))
                             },
                         )) as Box<dyn Transformer>)

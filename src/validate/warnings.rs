@@ -155,7 +155,7 @@ mod tests {
         ws.push(w);
         ws.push(Warning::new(Severity::Warning, "another"));
 
-        let visible = ws.visible(&[id.clone()], false);
+        let visible = ws.visible(std::slice::from_ref(&id), false);
         assert_eq!(visible.len(), 1);
         assert_eq!(visible[0].message, "another");
 

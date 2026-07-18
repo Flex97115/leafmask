@@ -90,7 +90,7 @@ pub fn select_for_deletion(
                 .iter()
                 .filter(|m| m.status == DumpStatus::Done)
                 .collect();
-            done.sort_by(|a, b| created_at(b).cmp(&created_at(a)));
+            done.sort_by_key(|d| std::cmp::Reverse(created_at(d)));
             done.into_iter().take(n).map(|m| m.id.clone()).collect()
         }
         None => HashSet::new(),

@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use bson::{doc, Bson, Document};
 use leafmask::dump::{read_collection_full, Dump, DumpOptions};
 use leafmask::hash::HashEngine;
-use leafmask::mongo::{CollectionData, MongoDriver, MongoSink, MongoSource};
+use leafmask::mongo::{MongoDriver, MongoSink, MongoSource};
 use leafmask::restore::{ErrorExclusions, Restore, RestoreOptions};
 use leafmask::storage::DirectoryStorage;
 use leafmask::transform::{apply::TransformationPlan, Registry};
