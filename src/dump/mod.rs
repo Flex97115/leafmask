@@ -5,9 +5,11 @@
 pub mod create;
 pub mod management;
 
+pub use create::{Dump, DumpOptions};
+
 use std::io::{Read, Write};
 
-use bson::{Bson, Document};
+use bson::Document;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
