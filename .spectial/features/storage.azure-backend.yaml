@@ -7,5 +7,7 @@ acceptance:
   - "Dumps written with storage.type=azure are uploaded as blobs under the configured container"
   - "Restoring, listing, and deleting dumps correctly read and modify blobs in that container"
 code:
-  - "TBD"
+  - "src/storage/azure.rs"
+tests:
+  - "src/storage/azure.rs (mod tests)"
 confidence: high
