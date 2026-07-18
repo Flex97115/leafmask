@@ -8,5 +8,7 @@ acceptance:
   - "Restoring, listing, and deleting dumps correctly read and modify files on the remote SFTP path"
   - "The SFTP connection is established lazily rather than eagerly on every command startup"
 code:
-  - "TBD"
+  - "src/storage/ssh.rs"
+tests:
+  - "src/storage/ssh.rs (mod tests)"
 confidence: medium
