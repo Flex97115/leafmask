@@ -9,5 +9,5 @@ acceptance:
 code:
   - "src/validate/schema_diff.rs"
 tests:
-  - "src/validate/schema_diff.rs (mod tests)"
+  - "src/validate/schema_diff.rs"
 confidence: medium

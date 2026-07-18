@@ -18,5 +18,5 @@ acceptance:
 code:
   - "src/validate/preview.rs"
 tests:
-  - "src/validate/preview.rs (mod tests)"
+  - "src/validate/preview.rs"
 confidence: medium

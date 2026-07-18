@@ -9,5 +9,5 @@ acceptance:
 code:
   - "src/transform/inheritance.rs"
 tests:
-  - "src/transform/inheritance.rs (mod tests)"
+  - "src/transform/inheritance.rs"
 confidence: medium

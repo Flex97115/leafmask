@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/validate/warnings.rs"
 tests:
-  - "src/validate/warnings.rs (mod tests)"
+  - "src/validate/warnings.rs"
 confidence: medium

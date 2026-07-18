@@ -18,6 +18,6 @@ code:
   - "src/dump/management.rs"
   - "src/cli.rs"
 tests:
-  - "src/dump/management.rs (mod tests)"
-  - "src/dump/mod.rs (mod tests)"
+  - "src/dump/management.rs"
+  - "src/dump/mod.rs"
 confidence: high

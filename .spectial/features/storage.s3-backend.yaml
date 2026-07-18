@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/storage/s3.rs"
 tests:
-  - "src/storage/s3.rs (mod tests)"
+  - "src/storage/s3.rs"
 confidence: high

@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/subset/virtual_references.rs"
 tests:
-  - "src/subset/virtual_references.rs (mod tests)"
+  - "src/subset/virtual_references.rs"
 confidence: medium

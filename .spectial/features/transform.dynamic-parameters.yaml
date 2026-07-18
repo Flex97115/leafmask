@@ -10,7 +10,7 @@ acceptance:
   - "Configuring a dynamic parameter that references a nonexistent field is reported as a validation error, not a runtime panic"
 code:
   - "src/transform/dynamic.rs"
-  - "src/toolkit.rs (cast::bson_to_typed)"
+  - "src/toolkit.rs"
 tests:
-  - "src/transform/dynamic.rs (mod tests)"
+  - "src/transform/dynamic.rs"
 confidence: medium

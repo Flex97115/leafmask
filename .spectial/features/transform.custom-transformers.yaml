@@ -11,5 +11,5 @@ acceptance:
 code:
   - "src/transform/custom.rs"
 tests:
-  - "src/transform/custom.rs (mod tests)"
+  - "src/transform/custom.rs"
 confidence: high

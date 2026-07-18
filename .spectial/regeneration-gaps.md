@@ -19,10 +19,14 @@ skill or the schema.
 
 - feature: dump.create, restore.database, validate.schema-diff
   missing: no MongoDB deployment is available in the regeneration environment.
-  assumed: all MongoDB access sits behind a `MongoSource` / `MongoSink` trait.
-    Dump/restore/subset/validate logic is unit-tested against an in-memory fake
-    implementation; the real `mongodb`-crate driver impl is behind the default-off
-    `mongo` feature and is not exercised by tests here.
+  assumed: all MongoDB access sits behind `MongoSource` / `MongoSink` traits, and
+    all dump/restore/subset/validate logic is unit-tested against an in-memory
+    fake (`InMemoryMongo`). NOT YET IMPLEMENTED: a concrete adapter backed by the
+    real `mongodb` crate. The `mongo` cargo feature reserves the `mongodb`+`tokio`
+    dependencies for that adapter, but the driver-backed `MongoSource`/`MongoSink`
+    impl is a documented extension point that this regeneration did not write
+    (there was no server to verify it against). This is the one place the port is
+    a stub rather than a faithful implementation.
 
 ## Data-model / behaviour assumptions
 

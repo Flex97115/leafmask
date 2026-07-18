@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/storage/ssh.rs"
 tests:
-  - "src/storage/ssh.rs (mod tests)"
+  - "src/storage/ssh.rs"
 confidence: medium

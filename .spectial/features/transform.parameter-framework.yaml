@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/toolkit.rs"
 tests:
-  - "src/toolkit.rs (mod tests)"
+  - "src/toolkit.rs"
 confidence: medium

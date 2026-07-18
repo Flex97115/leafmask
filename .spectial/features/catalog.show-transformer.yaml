@@ -15,5 +15,5 @@ code:
   - "src/catalog.rs"
   - "src/cli.rs"
 tests:
-  - "src/catalog.rs (mod tests)"
+  - "src/catalog.rs"
 confidence: high

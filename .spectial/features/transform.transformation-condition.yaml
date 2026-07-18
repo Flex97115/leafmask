@@ -11,5 +11,5 @@ acceptance:
 code:
   - "src/transform/condition.rs"
 tests:
-  - "src/transform/condition.rs (mod tests)"
+  - "src/transform/condition.rs"
 confidence: medium

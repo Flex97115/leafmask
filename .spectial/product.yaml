@@ -5,14 +5,15 @@ source:
   repo: https://github.com/greenmaskio/greenmask
   extracted_at: "2026-07-18"
 stack:
-  - "Go 1.26"
-  - "MongoDB (mongo-go-driver)"
-  - "Cobra (CLI) / Viper (config)"
-  - "S3 / Azure Blob / SFTP / local filesystem (pluggable storage)"
+  - "Rust 2021 (rustc 1.97)"
+  - "MongoDB access behind MongoSource/MongoSink traits (real mongodb-crate adapter behind the optional `mongo` feature)"
+  - "clap (CLI) / serde + serde_yaml (config)"
+  - "bson, sha2, flate2, regex, chrono"
+  - "Storage: local directory (default); S3 (aws-sdk-s3), Azure Blob, SFTP (ssh2) behind optional cargo features"
 conventions:
-  - "Dump/restore access MongoDB directly through the driver (no wrapped mongodump/mongorestore binaries), so per-document transformation can be applied inline while streaming"
-  - "Storage backends implement a common storages.Storager interface, selected at runtime by config, unchanged from the source product"
-  - "Configuration is a single YAML file with environment-variable interpolation and per-command flag/env overrides"
+  - "MongoDB is accessed through the MongoSource/MongoSink traits (no wrapped mongodump/mongorestore), so per-document transformation is applied inline while streaming; the real mongodb-crate driver is an optional feature, an in-memory fake backs the tests"
+  - "Storage backends implement a common `Storage` trait, selected at runtime from config (storage.type); the directory backend is always compiled, cloud backends are behind cargo features"
+  - "Configuration is a single YAML file (serde_yaml, deny_unknown_fields) with ${VAR} environment interpolation and per-command clap flag/env overrides"
 actors:
   - id: operator
     name: Operator

@@ -15,5 +15,5 @@ code:
   - "src/transform/mod.rs"
   - "src/transform/builtin.rs"
 tests:
-  - "src/transform/builtin.rs (mod tests)"
+  - "src/transform/builtin.rs"
 confidence: medium

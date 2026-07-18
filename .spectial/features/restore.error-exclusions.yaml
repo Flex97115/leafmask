@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/restore/error_exclusions.rs"
 tests:
-  - "src/restore/error_exclusions.rs (mod tests)"
+  - "src/restore/error_exclusions.rs"
 confidence: medium

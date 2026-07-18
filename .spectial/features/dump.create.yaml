@@ -22,5 +22,5 @@ code:
   - "src/dump/create.rs"
   - "src/mongo.rs"
 tests:
-  - "src/dump/create.rs (mod tests)"
+  - "src/dump/create.rs"
 confidence: medium

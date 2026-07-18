@@ -18,7 +18,7 @@ acceptance:
 code:
   - "src/restore/database.rs"
   - "src/mongo.rs"
-  - "src/dump/mod.rs (data read/write)"
+  - "src/dump/mod.rs"
 tests:
-  - "src/restore/database.rs (mod tests)"
+  - "src/restore/database.rs"
 confidence: medium

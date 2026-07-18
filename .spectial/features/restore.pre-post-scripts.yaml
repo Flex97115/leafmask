@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/restore/scripts.rs"
 tests:
-  - "src/restore/scripts.rs (mod tests)"
+  - "src/restore/scripts.rs"
 confidence: medium

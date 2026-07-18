@@ -12,5 +12,5 @@ acceptance:
 code:
   - "src/config.rs"
 tests:
-  - "src/config.rs (mod tests)"
+  - "src/config.rs"
 confidence: high

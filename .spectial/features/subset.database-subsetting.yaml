@@ -15,6 +15,6 @@ acceptance:
 code:
   - "src/subset/database_subsetting.rs"
 tests:
-  - "src/subset/database_subsetting.rs (mod tests)"
+  - "src/subset/database_subsetting.rs"
 notes: "Documented as a key product feature (README: 'Database Subsetting')."
 confidence: medium

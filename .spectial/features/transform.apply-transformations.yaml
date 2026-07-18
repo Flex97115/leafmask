@@ -17,5 +17,5 @@ acceptance:
 code:
   - "src/transform/apply.rs"
 tests:
-  - "src/transform/apply.rs (mod tests)"
+  - "src/transform/apply.rs"
 confidence: medium

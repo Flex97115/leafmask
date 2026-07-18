@@ -9,5 +9,5 @@ acceptance:
 code:
   - "src/storage/azure.rs"
 tests:
-  - "src/storage/azure.rs (mod tests)"
+  - "src/storage/azure.rs"
 confidence: high

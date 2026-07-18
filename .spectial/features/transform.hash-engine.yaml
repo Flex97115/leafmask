@@ -10,5 +10,5 @@ acceptance:
 code:
   - "src/hash.rs"
 tests:
-  - "src/hash.rs (mod tests)"
+  - "src/hash.rs"
 confidence: medium

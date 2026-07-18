@@ -10,5 +10,5 @@ code:
   - "src/storage/mod.rs"
   - "src/storage/directory.rs"
 tests:
-  - "src/storage/directory.rs (mod tests)"
+  - "src/storage/directory.rs"
 confidence: high
