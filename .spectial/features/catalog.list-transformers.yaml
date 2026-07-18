@@ -12,5 +12,8 @@ acceptance:
   - "Running list-transformers prints every built-in transformer's name and short description"
   - "Custom transformers declared in the loaded config file also appear in the listing"
 code:
-  - "TBD"
+  - "src/catalog.rs"
+  - "src/cli.rs"
+tests:
+  - "src/catalog.rs (mod tests)"
 confidence: high

@@ -16,7 +16,7 @@ use regex::Regex;
 
 use crate::error::{Error, Result};
 use crate::hash::HashEngine;
-use crate::toolkit::{cast, ParamDefinition, ParamType, ParamValues};
+use crate::toolkit::{cast, ParamDefinition, ParamType};
 
 use super::{FnTransformer, Registry, Transformer, TransformerFactory};
 

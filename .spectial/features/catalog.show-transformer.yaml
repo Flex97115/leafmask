@@ -12,5 +12,8 @@ acceptance:
   - "Requesting show-transformer for a known transformer name prints its parameters, their types, and whether they are required"
   - "Requesting show-transformer for an unknown name fails with a clear 'not found' error"
 code:
-  - "TBD"
+  - "src/catalog.rs"
+  - "src/cli.rs"
+tests:
+  - "src/catalog.rs (mod tests)"
 confidence: high

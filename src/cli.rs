@@ -26,11 +26,28 @@ pub enum Command {
     },
 }
 
-/// Entry point invoked by `main`. Returns a process exit code.
+/// Load the config if one was provided (or discoverable via env).
+fn maybe_config(cli: &Cli) -> crate::Result<Option<crate::config::Config>> {
+    match crate::config::locate(cli.config.clone(), None) {
+        Ok(path) => Ok(Some(crate::config::load(&path)?)),
+        // No config is fine for commands that do not require one.
+        Err(_) => Ok(None),
+    }
+}
+
+/// Entry point invoked by `main`.
 pub fn run(cli: Cli) -> crate::Result<()> {
-    match cli.command {
-        Command::ListTransformers | Command::ShowTransformer { .. } => {
-            // Wired up by the catalog features.
+    match &cli.command {
+        Command::ListTransformers => {
+            let config = maybe_config(&cli)?;
+            let registry = crate::catalog::build_registry(config.as_ref())?;
+            println!("{}", crate::catalog::list(&registry));
+            Ok(())
+        }
+        Command::ShowTransformer { name } => {
+            let config = maybe_config(&cli)?;
+            let registry = crate::catalog::build_registry(config.as_ref())?;
+            print!("{}", crate::catalog::show(&registry, name)?);
             Ok(())
         }
     }
