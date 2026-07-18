@@ -8,5 +8,7 @@ acceptance:
   - "Static parameter values are decoded from the YAML config and made available to the transformer at document-transform time"
   - "Type casting functions correctly convert between BSON native types (ObjectId, Decimal128, ISODate, binary, etc.) and the generic values transformers operate on"
 code:
-  - "TBD"
+  - "src/toolkit.rs"
+tests:
+  - "src/toolkit.rs (mod tests)"
 confidence: medium
