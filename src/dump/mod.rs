@@ -2,11 +2,16 @@
 //! by every command that reads or writes dumps, plus dump creation and dump
 //! management (list/show/delete).
 
+pub mod create;
 pub mod management;
 
+use std::io::{Read, Write};
+
+use bson::{Bson, Document};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+use crate::mongo::CollectionData;
 use crate::storage::Storage;
 
 /// Completion status of a dump.
@@ -155,6 +160,76 @@ pub fn resolve(storage: &dyn Storage, id_or_latest: &str) -> Result<DumpMetadata
     } else {
         read_metadata(storage, id_or_latest)
     }
+}
+
+/// The storage path of a collection's data blob within a dump.
+pub fn data_path(db: &str, collection: &str, gzip: bool) -> String {
+    let ext = if gzip { "bson.gz" } else { "bson" };
+    format!("data/{db}/{collection}.{ext}")
+}
+
+/// Serialize a collection's documents to BSON (optionally gzip-compressed) and
+/// write them into the dump. BSON round-trips every native type exactly.
+pub fn write_collection_data(
+    storage: &dyn Storage,
+    dump_id: &str,
+    data: &CollectionData,
+    gzip: bool,
+) -> Result<u64> {
+    let raw = bson::to_vec(data).map_err(|e| Error::Storage(e.to_string()))?;
+    let bytes = if gzip {
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&raw).map_err(|e| Error::Storage(e.to_string()))?;
+        enc.finish().map_err(|e| Error::Storage(e.to_string()))?
+    } else {
+        raw
+    };
+    let path = format!(
+        "{dump_id}/{}",
+        data_path(&data.database, &data.collection, gzip)
+    );
+    let size = bytes.len() as u64;
+    storage.put(&path, &bytes)?;
+    Ok(size)
+}
+
+/// Read a collection's full data (documents, indexes, validator, options) back
+/// from a dump, transparently handling the gzip and plain variants.
+pub fn read_collection_full(
+    storage: &dyn Storage,
+    dump_id: &str,
+    db: &str,
+    collection: &str,
+) -> Result<CollectionData> {
+    let gz_path = format!("{dump_id}/{}", data_path(db, collection, true));
+    let plain_path = format!("{dump_id}/{}", data_path(db, collection, false));
+
+    let (bytes, gz) = if storage.exists(&gz_path)? {
+        (storage.get(&gz_path)?, true)
+    } else {
+        (storage.get(&plain_path)?, false)
+    };
+
+    let raw = if gz {
+        let mut dec = flate2::read::GzDecoder::new(&bytes[..]);
+        let mut out = Vec::new();
+        dec.read_to_end(&mut out).map_err(|e| Error::Storage(e.to_string()))?;
+        out
+    } else {
+        bytes
+    };
+
+    bson::from_slice(&raw).map_err(|e| Error::Storage(e.to_string()))
+}
+
+/// Read just a collection's documents back from a dump.
+pub fn read_collection_data(
+    storage: &dyn Storage,
+    dump_id: &str,
+    db: &str,
+    collection: &str,
+) -> Result<Vec<Document>> {
+    Ok(read_collection_full(storage, dump_id, db, collection)?.documents)
 }
 
 #[cfg(test)]

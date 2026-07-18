@@ -16,5 +16,9 @@ acceptance:
   - "Restoration can run with multiple parallel jobs and, when requested, in dependency order (indexes and validators created after their collection's documents)"
   - "Data can be restored either via ordered or unordered bulk writes, in configurable batch sizes"
 code:
-  - "TBD"
+  - "src/restore/database.rs"
+  - "src/mongo.rs"
+  - "src/dump/mod.rs (data read/write)"
+tests:
+  - "src/restore/database.rs (mod tests)"
 confidence: medium

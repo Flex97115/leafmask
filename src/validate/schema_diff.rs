@@ -9,9 +9,10 @@
 use std::collections::BTreeMap;
 
 use bson::Bson;
+use serde::{Deserialize, Serialize};
 
 /// An index as captured for drift comparison.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IndexSpec {
     pub name: String,
     /// Ordered `(field, direction)` key spec.

@@ -59,3 +59,11 @@ skill or the schema.
   assumed: pushed to MongoDB at read time in the real dump; the offline
     should_include() matcher approximates it with equality-only matching for
     testing without a database.
+
+- feature: restore.database, dump.create
+  missing: parallel job execution and precise ordered/unordered bulk-write
+    error semantics.
+  assumed: restore/dump run sequentially with configurable batch sizes; the
+    ordered/parallel_jobs options are accepted but execution is sequential (a
+    performance detail, not behavioural). Real session snapshots and bulk writes
+    require the mongo feature + a live server.
