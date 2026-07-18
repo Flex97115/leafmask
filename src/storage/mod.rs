@@ -6,6 +6,9 @@
 //! available; the S3, Azure, and SSH backends are behind cargo features.
 
 pub mod directory;
+pub mod s3;
+pub mod azure;
+pub mod ssh;
 
 pub use directory::DirectoryStorage;
 

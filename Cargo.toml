@@ -36,13 +36,14 @@ aws-sdk-s3 = { version = "1", optional = true }
 aws-config = { version = "1", optional = true }
 azure_storage = { version = "0.20", optional = true }
 azure_storage_blobs = { version = "0.20", optional = true }
+futures = { version = "0.3", optional = true }
 ssh2 = { version = "0.9", optional = true }
 
 [features]
 default = []
 mongo = ["dep:mongodb", "dep:tokio"]
 s3 = ["dep:aws-sdk-s3", "dep:aws-config", "dep:tokio"]
-azure = ["dep:azure_storage", "dep:azure_storage_blobs", "dep:tokio"]
+azure = ["dep:azure_storage", "dep:azure_storage_blobs", "dep:tokio", "dep:futures"]
 ssh = ["dep:ssh2"]
 
 [dev-dependencies]

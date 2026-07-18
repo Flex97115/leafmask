@@ -2285,6 +2285,7 @@ dependencies = [
  "chrono",
  "clap",
  "flate2",
+ "futures",
  "hex",
  "mongodb",
  "regex",

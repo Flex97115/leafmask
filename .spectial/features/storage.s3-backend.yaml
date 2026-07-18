@@ -8,5 +8,7 @@ acceptance:
   - "Restoring, listing, and deleting dumps correctly read and modify objects in that bucket"
   - "S3-compatible endpoints other than AWS (e.g. MinIO) can be targeted via an explicit endpoint override"
 code:
-  - "TBD"
+  - "src/storage/s3.rs"
+tests:
+  - "src/storage/s3.rs (mod tests)"
 confidence: high
