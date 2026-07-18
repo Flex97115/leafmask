@@ -1,0 +1,12 @@
+id: restore.error-exclusions
+name: Insert error exclusions
+description: "The operator can configure specific unique-index names or MongoDB error codes (globally or per collection) that should be tolerated and skipped during data restoration instead of aborting the whole restore."
+level: internal
+depends_on: []
+acceptance:
+  - "An insert error matching a configured excluded index name or error code (e.g. E11000 duplicate key) for its collection is logged and skipped, and restoration continues with the next document"
+  - "An insert error not matching any exclusion still aborts restoration (or the collection, depending on --exit-on-error) as before"
+  - "Global exclusions apply across all collections in addition to any collection-specific ones"
+code:
+  - "TBD"
+confidence: medium

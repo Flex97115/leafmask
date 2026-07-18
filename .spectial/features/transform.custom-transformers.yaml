@@ -1,0 +1,13 @@
+id: transform.custom-transformers
+name: Custom/external transformers
+description: "The operator can extend the transformation engine with their own transformers, implemented either as an external command/process communicating over stdin/stdout in any programming language, or as a Go text-template, declared under custom_transformers in the config file."
+level: internal
+depends_on:
+  - transform.parameter-framework
+acceptance:
+  - "A custom_transformers entry with a command driver spawns the configured executable and exchanges documents with it over stdin/stdout for each transformed record"
+  - "A record that fails to be produced by the external process within the expected exit code causes the transformation (and dump) to fail with a clear error"
+  - "Custom transformers appear in the transformer catalog alongside built-in ones and can declare their own typed parameters"
+code:
+  - "TBD"
+confidence: high

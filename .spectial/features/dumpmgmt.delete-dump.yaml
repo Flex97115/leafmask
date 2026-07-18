@@ -1,0 +1,18 @@
+id: dumpmgmt.delete-dump
+name: Delete or prune dumps
+description: "The operator can delete a specific dump by ID from storage, or apply a retention policy to prune multiple dumps at once — keeping only the N most recent, keeping dumps for a given duration, deleting dumps before a given date, and/or pruning failed or unknown-status dumps — with an optional dry-run to preview what would be deleted."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+depends_on:
+  - storage.backend-selection
+acceptance:
+  - "Deleting a dump by explicit ID removes it, and only it, from storage"
+  - "--retain-recent N keeps only the N most recent completed dumps and deletes the rest"
+  - "--retain-for and --before-date delete dumps outside the retained time window"
+  - "--prune-failed (optionally combined with --prune-unsafe) removes dumps that did not complete successfully"
+  - "--dry-run reports exactly what would be deleted without deleting anything"
+code:
+  - "TBD"
+confidence: high

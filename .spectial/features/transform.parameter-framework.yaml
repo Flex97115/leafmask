@@ -1,0 +1,12 @@
+id: transform.parameter-framework
+name: Transformer parameter definition and validation SDK
+description: "The product provides a typed parameter framework (the toolkit package) that every transformer, built-in or custom, uses to declare, cast, and validate its configuration parameters against the target field's BSON type."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "A transformer parameter declares an expected type and is rejected at config-validation time if the configured value cannot be cast to it"
+  - "Static parameter values are decoded from the YAML config and made available to the transformer at document-transform time"
+  - "Type casting functions correctly convert between BSON native types (ObjectId, Decimal128, ISODate, binary, etc.) and the generic values transformers operate on"
+code:
+  - "TBD"
+confidence: medium

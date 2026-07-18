@@ -1,0 +1,11 @@
+id: transform.transformation-inheritance
+name: Transformation propagation to referencing fields
+description: "The operator can have a transformer's rule automatically apply to fields in other collections that hold a declared reference to the transformed field (apply_for_references), instead of repeating the configuration for every referencing collection, keeping referential values consistent. (Postgres-style partition inheritance does not apply — MongoDB has no equivalent table-partitioning concept.)"
+level: internal
+depends_on: []
+acceptance:
+  - "A transformer with apply_for_references applies the same deterministic transformation to fields that hold a declared reference to the transformed field, keeping referential values consistent"
+  - "A referencing field with its own explicitly configured transformation is not overridden by the inherited one"
+code:
+  - "TBD"
+confidence: medium

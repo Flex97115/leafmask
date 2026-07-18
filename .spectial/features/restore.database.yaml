@@ -1,0 +1,20 @@
+id: restore.database
+name: Restore a dump to a target database
+description: "The operator can restore a previously stored dump (by ID, or the latest one) into a target MongoDB deployment, with filtering, ordering, and parallelism options equivalent to mongorestore."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+depends_on:
+  - storage.backend-selection
+  - restore.pre-post-scripts
+  - restore.error-exclusions
+acceptance:
+  - "Restoring with the special ID 'latest' selects the most recent completed dump found in the configured storage"
+  - "Restoring with an explicit dump ID that does not exist in storage fails with a clear 'dump not found' error instead of restoring nothing silently"
+  - "Database/collection/index include and exclude filters restrict what is restored"
+  - "Restoration can run with multiple parallel jobs and, when requested, in dependency order (indexes and validators created after their collection's documents)"
+  - "Data can be restored either via ordered or unordered bulk writes, in configurable batch sizes"
+code:
+  - "TBD"
+confidence: medium

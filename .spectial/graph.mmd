@@ -1,0 +1,62 @@
+graph TD
+    catalog_list_transformers(["List available transformers"])
+    catalog_show_transformer(["Show transformer details"])
+    config_loading[("Configuration file loading")]
+    dump_create(["Create a logical database dump"])
+    dumpmgmt_delete_dump(["Delete or prune dumps"])
+    dumpmgmt_list_dumps(["List dumps in storage"])
+    dumpmgmt_show_dump(["Show dump metadata / table of contents"])
+    restore_database(["Restore a dump to a target database"])
+    restore_error_exclusions["Insert error exclusions"]
+    restore_pre_post_scripts["Pre/post-restore hook scripts"]
+    storage_azure_backend[("Azure Blob storage backend")]
+    storage_backend_selection[("Pluggable storage backend selection")]
+    storage_directory_backend[("Local directory storage backend")]
+    storage_s3_backend[("S3-compatible storage backend")]
+    storage_ssh_backend[("SSH/SFTP storage backend")]
+    subset_database_subsetting(["Referentially-intact database subsetting"])
+    subset_virtual_references["Virtual (non-FK) reference declaration"]
+    transform_apply_transformations["Apply configured transformations during dump"]
+    transform_builtin_transformers["Built-in transformer library"]
+    transform_custom_transformers["Custom/external transformers"]
+    transform_dynamic_parameters["Dynamic (field-referencing) transformer parameters"]
+    transform_hash_engine[("Deterministic hash-based value generation")]
+    transform_parameter_framework[("Transformer parameter definition and validation SDK")]
+    transform_transformation_condition["Conditional transformation"]
+    transform_transformation_inheritance["Transformation propagation to referencing fields"]
+    validate_schema_diff["Schema drift detection"]
+    validate_transformation_preview(["Validate and preview transformations without dumping"])
+    validate_warnings["Transformer configuration warnings"]
+    catalog_list_transformers --> transform_builtin_transformers
+    catalog_list_transformers --> transform_custom_transformers
+    catalog_show_transformer --> transform_builtin_transformers
+    catalog_show_transformer --> transform_custom_transformers
+    dump_create --> config_loading
+    dump_create --> storage_backend_selection
+    dump_create --> transform_apply_transformations
+    dump_create --> subset_database_subsetting
+    dumpmgmt_delete_dump --> storage_backend_selection
+    dumpmgmt_list_dumps --> storage_backend_selection
+    dumpmgmt_show_dump --> storage_backend_selection
+    restore_database --> storage_backend_selection
+    restore_database --> restore_pre_post_scripts
+    restore_database --> restore_error_exclusions
+    storage_backend_selection --> storage_directory_backend
+    storage_backend_selection --> storage_s3_backend
+    storage_backend_selection --> storage_azure_backend
+    storage_backend_selection --> storage_ssh_backend
+    subset_database_subsetting --> subset_virtual_references
+    transform_apply_transformations --> transform_builtin_transformers
+    transform_apply_transformations --> transform_custom_transformers
+    transform_apply_transformations --> transform_parameter_framework
+    transform_apply_transformations --> transform_dynamic_parameters
+    transform_apply_transformations --> transform_transformation_condition
+    transform_apply_transformations --> transform_transformation_inheritance
+    transform_builtin_transformers --> transform_parameter_framework
+    transform_builtin_transformers --> transform_hash_engine
+    transform_custom_transformers --> transform_parameter_framework
+    transform_dynamic_parameters --> transform_parameter_framework
+    transform_transformation_condition --> transform_parameter_framework
+    validate_transformation_preview --> transform_apply_transformations
+    validate_transformation_preview --> validate_schema_diff
+    validate_transformation_preview --> validate_warnings

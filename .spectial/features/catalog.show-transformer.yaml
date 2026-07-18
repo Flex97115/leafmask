@@ -1,0 +1,16 @@
+id: catalog.show-transformer
+name: Show transformer details
+description: "The operator can look up one transformer by name and see its full documentation: description, parameters, parameter types, and defaults, to know how to configure it correctly."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: none
+depends_on:
+  - transform.builtin-transformers
+  - transform.custom-transformers
+acceptance:
+  - "Requesting show-transformer for a known transformer name prints its parameters, their types, and whether they are required"
+  - "Requesting show-transformer for an unknown name fails with a clear 'not found' error"
+code:
+  - "TBD"
+confidence: high

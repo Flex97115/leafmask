@@ -1,0 +1,13 @@
+id: transform.transformation-condition
+name: Conditional transformation
+description: "The operator can restrict a transformer (or an entire collection's transformation entry) to only apply when a configured expression evaluates true for the current document, via a `when` condition."
+level: internal
+depends_on:
+  - transform.parameter-framework
+acceptance:
+  - "A transformer with a `when` expression only runs for documents where the expression evaluates truthy; other documents pass through unmodified for that transformer"
+  - "A collection-level `when` expression can skip transformation for the whole document"
+  - "The condition expression can reference the document's own field values"
+code:
+  - "TBD"
+confidence: medium

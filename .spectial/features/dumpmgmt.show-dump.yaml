@@ -1,0 +1,16 @@
+id: dumpmgmt.show-dump
+name: Show dump metadata / table of contents
+description: "The operator can inspect the detailed metadata and table of contents of one dump (by ID, or 'latest'): the databases, collections, indexes, and document counts it contains, and the order in which they will be restored."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+depends_on:
+  - storage.backend-selection
+acceptance:
+  - "Requesting show-dump for an existing dump ID prints its table of contents (databases, collections, indexes, ordering) and metadata"
+  - "Requesting show-dump with 'latest' resolves to the most recently completed dump"
+  - "Requesting a nonexistent dump ID fails with a clear error"
+code:
+  - "TBD"
+confidence: medium

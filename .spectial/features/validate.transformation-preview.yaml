@@ -1,0 +1,20 @@
+id: validate.transformation-preview
+name: Validate and preview transformations without dumping
+description: "The operator can run configured transformations against a limited sample of documents and see a before/after diff, in text or JSON, without producing a real dump — to check that the transformation config behaves as intended before running it for real."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+depends_on:
+  - transform.apply-transformations
+  - validate.schema-diff
+  - validate.warnings
+acceptance:
+  - "Running validate with --data on a collection shows the original and transformed value for each sampled field, up to --rows-limit documents"
+  - "Output can be requested in text or JSON format, and per-document diffs can be shown in a vertical or horizontal table layout"
+  - "--transformed-only restricts the preview to fields that actually have a transformer configured"
+  - "An invalid --format or --table-format value fails fast with a clear error before any DB work happens"
+  - "--strict makes any unresolved validation warning fail the command with a non-zero exit code instead of just printing a warning"
+code:
+  - "TBD"
+confidence: medium

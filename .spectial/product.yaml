@@ -1,0 +1,47 @@
+name: Leafmask
+description: "A stateless CLI tool for logical MongoDB database dumping, deterministic data anonymization, synthetic data generation, referentially-intact subsetting, and restoration."
+version: 0.1.0
+source:
+  repo: https://github.com/greenmaskio/greenmask
+  extracted_at: "2026-07-18"
+stack:
+  - "Go 1.26"
+  - "MongoDB (mongo-go-driver)"
+  - "Cobra (CLI) / Viper (config)"
+  - "S3 / Azure Blob / SFTP / local filesystem (pluggable storage)"
+conventions:
+  - "Dump/restore access MongoDB directly through the driver (no wrapped mongodump/mongorestore binaries), so per-document transformation can be applied inline while streaming"
+  - "Storage backends implement a common storages.Storager interface, selected at runtime by config, unchanged from the source product"
+  - "Configuration is a single YAML file with environment-variable interpolation and per-command flag/env overrides"
+actors:
+  - id: operator
+    name: Operator
+    description: "The person or automated system (e.g. CI/CD pipeline) running the Leafmask CLI with MongoDB and storage-backend credentials. Leafmask has no internal user/auth system of its own — access control is delegated to the database and storage credentials supplied to the CLI."
+domains:
+  - id: dump
+    name: Dump
+    description: "Producing logical backups of MongoDB collections, optionally transformed and subset."
+  - id: transform
+    name: Transformation engine
+    description: "Deterministic anonymization/masking/synthetic-data-generation applied to dumped documents."
+  - id: subset
+    name: Subsetting
+    description: "Filtering a database dump down to a referentially-intact subset of documents."
+  - id: restore
+    name: Restore
+    description: "Restoring a stored dump into a target MongoDB database."
+  - id: dumpmgmt
+    name: Dump management
+    description: "Listing, inspecting, and deleting/pruning dumps held in storage."
+  - id: validate
+    name: Validation
+    description: "Previewing and validating transformation configuration and schema drift before running a real dump."
+  - id: catalog
+    name: Transformer catalog
+    description: "Discovering available built-in and custom transformers and their parameters."
+  - id: storage
+    name: Storage backends
+    description: "Pluggable storage abstraction for where dumps are read from and written to."
+  - id: config
+    name: Configuration
+    description: "Loading and interpolating the CLI's YAML configuration file."

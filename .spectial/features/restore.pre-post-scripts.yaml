@@ -1,0 +1,12 @@
+id: restore.pre-post-scripts
+name: Pre/post-restore hook scripts
+description: "The operator can declare MongoDB shell (mongosh) scripts, script files, or external commands to run at specific stages of the restore process, so they can prepare or clean up the target database around the restoration."
+level: internal
+depends_on: []
+acceptance:
+  - "A configured script for a given restore stage runs at that stage before proceeding to the next one"
+  - "A script can be a raw mongosh command, a path to a script file, or an external command with arguments"
+  - "A failing script stops the restore and surfaces the error to the operator"
+code:
+  - "TBD"
+confidence: medium

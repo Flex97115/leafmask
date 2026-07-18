@@ -1,0 +1,280 @@
+{
+  "generated_at": "2026-07-18",
+  "product": "Leafmask",
+  "nodes": [
+    {
+      "id": "catalog.list-transformers",
+      "name": "List available transformers",
+      "level": "user-facing"
+    },
+    {
+      "id": "catalog.show-transformer",
+      "name": "Show transformer details",
+      "level": "user-facing"
+    },
+    {
+      "id": "config.loading",
+      "name": "Configuration file loading",
+      "level": "infrastructure"
+    },
+    {
+      "id": "dump.create",
+      "name": "Create a logical database dump",
+      "level": "user-facing"
+    },
+    {
+      "id": "dumpmgmt.delete-dump",
+      "name": "Delete or prune dumps",
+      "level": "user-facing"
+    },
+    {
+      "id": "dumpmgmt.list-dumps",
+      "name": "List dumps in storage",
+      "level": "user-facing"
+    },
+    {
+      "id": "dumpmgmt.show-dump",
+      "name": "Show dump metadata / table of contents",
+      "level": "user-facing"
+    },
+    {
+      "id": "restore.database",
+      "name": "Restore a dump to a target database",
+      "level": "user-facing"
+    },
+    {
+      "id": "restore.error-exclusions",
+      "name": "Insert error exclusions",
+      "level": "internal"
+    },
+    {
+      "id": "restore.pre-post-scripts",
+      "name": "Pre/post-restore hook scripts",
+      "level": "internal"
+    },
+    {
+      "id": "storage.azure-backend",
+      "name": "Azure Blob storage backend",
+      "level": "infrastructure"
+    },
+    {
+      "id": "storage.backend-selection",
+      "name": "Pluggable storage backend selection",
+      "level": "infrastructure"
+    },
+    {
+      "id": "storage.directory-backend",
+      "name": "Local directory storage backend",
+      "level": "infrastructure"
+    },
+    {
+      "id": "storage.s3-backend",
+      "name": "S3-compatible storage backend",
+      "level": "infrastructure"
+    },
+    {
+      "id": "storage.ssh-backend",
+      "name": "SSH/SFTP storage backend",
+      "level": "infrastructure"
+    },
+    {
+      "id": "subset.database-subsetting",
+      "name": "Referentially-intact database subsetting",
+      "level": "user-facing"
+    },
+    {
+      "id": "subset.virtual-references",
+      "name": "Virtual (non-FK) reference declaration",
+      "level": "internal"
+    },
+    {
+      "id": "transform.apply-transformations",
+      "name": "Apply configured transformations during dump",
+      "level": "internal"
+    },
+    {
+      "id": "transform.builtin-transformers",
+      "name": "Built-in transformer library",
+      "level": "internal"
+    },
+    {
+      "id": "transform.custom-transformers",
+      "name": "Custom/external transformers",
+      "level": "internal"
+    },
+    {
+      "id": "transform.dynamic-parameters",
+      "name": "Dynamic (field-referencing) transformer parameters",
+      "level": "internal"
+    },
+    {
+      "id": "transform.hash-engine",
+      "name": "Deterministic hash-based value generation",
+      "level": "infrastructure"
+    },
+    {
+      "id": "transform.parameter-framework",
+      "name": "Transformer parameter definition and validation SDK",
+      "level": "infrastructure"
+    },
+    {
+      "id": "transform.transformation-condition",
+      "name": "Conditional transformation",
+      "level": "internal"
+    },
+    {
+      "id": "transform.transformation-inheritance",
+      "name": "Transformation propagation to referencing fields",
+      "level": "internal"
+    },
+    {
+      "id": "validate.schema-diff",
+      "name": "Schema drift detection",
+      "level": "internal"
+    },
+    {
+      "id": "validate.transformation-preview",
+      "name": "Validate and preview transformations without dumping",
+      "level": "user-facing"
+    },
+    {
+      "id": "validate.warnings",
+      "name": "Transformer configuration warnings",
+      "level": "internal"
+    }
+  ],
+  "edges": [
+    {
+      "from": "catalog.list-transformers",
+      "to": "transform.builtin-transformers"
+    },
+    {
+      "from": "catalog.list-transformers",
+      "to": "transform.custom-transformers"
+    },
+    {
+      "from": "catalog.show-transformer",
+      "to": "transform.builtin-transformers"
+    },
+    {
+      "from": "catalog.show-transformer",
+      "to": "transform.custom-transformers"
+    },
+    {
+      "from": "dump.create",
+      "to": "config.loading"
+    },
+    {
+      "from": "dump.create",
+      "to": "storage.backend-selection"
+    },
+    {
+      "from": "dump.create",
+      "to": "transform.apply-transformations"
+    },
+    {
+      "from": "dump.create",
+      "to": "subset.database-subsetting"
+    },
+    {
+      "from": "dumpmgmt.delete-dump",
+      "to": "storage.backend-selection"
+    },
+    {
+      "from": "dumpmgmt.list-dumps",
+      "to": "storage.backend-selection"
+    },
+    {
+      "from": "dumpmgmt.show-dump",
+      "to": "storage.backend-selection"
+    },
+    {
+      "from": "restore.database",
+      "to": "storage.backend-selection"
+    },
+    {
+      "from": "restore.database",
+      "to": "restore.pre-post-scripts"
+    },
+    {
+      "from": "restore.database",
+      "to": "restore.error-exclusions"
+    },
+    {
+      "from": "storage.backend-selection",
+      "to": "storage.directory-backend"
+    },
+    {
+      "from": "storage.backend-selection",
+      "to": "storage.s3-backend"
+    },
+    {
+      "from": "storage.backend-selection",
+      "to": "storage.azure-backend"
+    },
+    {
+      "from": "storage.backend-selection",
+      "to": "storage.ssh-backend"
+    },
+    {
+      "from": "subset.database-subsetting",
+      "to": "subset.virtual-references"
+    },
+    {
+      "from": "transform.apply-transformations",
+      "to": "transform.builtin-transformers"
+    },
+    {
+      "from": "transform.apply-transformations",
+      "to": "transform.custom-transformers"
+    },
+    {
+      "from": "transform.apply-transformations",
+      "to": "transform.parameter-framework"
+    },
+    {
+      "from": "transform.apply-transformations",
+      "to": "transform.dynamic-parameters"
+    },
+    {
+      "from": "transform.apply-transformations",
+      "to": "transform.transformation-condition"
+    },
+    {
+      "from": "transform.apply-transformations",
+      "to": "transform.transformation-inheritance"
+    },
+    {
+      "from": "transform.builtin-transformers",
+      "to": "transform.parameter-framework"
+    },
+    {
+      "from": "transform.builtin-transformers",
+      "to": "transform.hash-engine"
+    },
+    {
+      "from": "transform.custom-transformers",
+      "to": "transform.parameter-framework"
+    },
+    {
+      "from": "transform.dynamic-parameters",
+      "to": "transform.parameter-framework"
+    },
+    {
+      "from": "transform.transformation-condition",
+      "to": "transform.parameter-framework"
+    },
+    {
+      "from": "validate.transformation-preview",
+      "to": "transform.apply-transformations"
+    },
+    {
+      "from": "validate.transformation-preview",
+      "to": "validate.schema-diff"
+    },
+    {
+      "from": "validate.transformation-preview",
+      "to": "validate.warnings"
+    }
+  ]
+}

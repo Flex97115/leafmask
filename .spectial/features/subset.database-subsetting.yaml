@@ -1,0 +1,18 @@
+id: subset.database-subsetting
+name: Referentially-intact database subsetting
+description: "The operator can dump only a filtered subset of documents from selected collections (via subset_conds) while the product automatically follows declared reference relationships (since MongoDB has no enforced foreign keys, every relationship is declared explicitly), including cyclic and polymorphic references, so the resulting subset stays referentially consistent."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+depends_on:
+  - subset.virtual-references
+acceptance:
+  - "A collection with a subset_conds filter dumps only the documents matching that condition"
+  - "Documents in related collections required to satisfy the declared reference relationships for the filtered documents are included even without their own explicit filter"
+  - "A cyclic chain of declared references between collections does not cause an infinite loop or a failed dump"
+  - "A polymorphic reference (declared via a reference with polymorphic expressions) is resolved to the correct target collection when subsetting"
+code:
+  - "TBD"
+notes: "Documented as a key product feature (README: 'Database Subsetting')."
+confidence: medium

@@ -1,0 +1,11 @@
+id: storage.directory-backend
+name: Local directory storage backend
+description: "The product can store and read dumps on the local filesystem under a configured directory path."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "Dumps written with storage.type=directory land under the configured directory path, one subdirectory per dump ID"
+  - "Restoring, listing, and deleting dumps correctly read and modify files under that directory"
+code:
+  - "TBD"
+confidence: high

@@ -1,0 +1,11 @@
+id: storage.azure-backend
+name: Azure Blob storage backend
+description: "The product can store and read dumps in an Azure Blob Storage container."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "Dumps written with storage.type=azure are uploaded as blobs under the configured container"
+  - "Restoring, listing, and deleting dumps correctly read and modify blobs in that container"
+code:
+  - "TBD"
+confidence: high

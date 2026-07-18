@@ -1,0 +1,19 @@
+id: transform.apply-transformations
+name: Apply configured transformations during dump
+description: "The product transforms document field values while dumping, according to per-collection, per-field transformer rules declared in the config file, so the resulting dump is anonymized/masked instead of a verbatim copy of production data."
+level: internal
+depends_on:
+  - transform.builtin-transformers
+  - transform.custom-transformers
+  - transform.parameter-framework
+  - transform.dynamic-parameters
+  - transform.transformation-condition
+  - transform.transformation-inheritance
+acceptance:
+  - "For each collection listed under dump.transformation, the configured transformers run on the matching fields while streaming documents out of MongoDB"
+  - "Documents in collections without a matching transformation entry are dumped unmodified"
+  - "A collection can be restricted to a subset of documents via a custom filter query before transformation is applied"
+  - "Field types can be overridden so a transformer can operate on a different logical type than the field's native BSON type"
+code:
+  - "TBD"
+confidence: medium

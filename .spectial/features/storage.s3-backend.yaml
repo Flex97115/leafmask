@@ -1,0 +1,12 @@
+id: storage.s3-backend
+name: S3-compatible storage backend
+description: "The product can store and read dumps in an S3-compatible object storage service (AWS S3, MinIO, GCS, etc.), configured with bucket, region, and credentials."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "Dumps written with storage.type=s3 are uploaded as objects under the configured bucket and key prefix"
+  - "Restoring, listing, and deleting dumps correctly read and modify objects in that bucket"
+  - "S3-compatible endpoints other than AWS (e.g. MinIO) can be targeted via an explicit endpoint override"
+code:
+  - "TBD"
+confidence: high

@@ -1,0 +1,15 @@
+id: dumpmgmt.list-dumps
+name: List dumps in storage
+description: "The operator can list all dumps currently held in the configured storage, with their ID, status, and size."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+depends_on:
+  - storage.backend-selection
+acceptance:
+  - "Running list-dumps against a storage containing dumps prints each dump's ID and completion status"
+  - "An empty storage produces an empty (not erroring) listing"
+code:
+  - "TBD"
+confidence: high

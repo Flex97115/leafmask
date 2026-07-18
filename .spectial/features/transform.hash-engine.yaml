@@ -1,0 +1,12 @@
+id: transform.hash-engine
+name: Deterministic hash-based value generation
+description: "The product derives pseudo-random replacement values from a deterministic hash of the original value and a configured seed/salt, so masking a given input always produces the same output across separate dump runs."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "The same input value and salt always produce the same generated output, regardless of when or on which machine the dump runs"
+  - "Different salts or seeds produce different output for the same input"
+  - "The generator can project a hash into different target ranges/types (int64, bytes) needed by higher-level transformers"
+code:
+  - "TBD"
+confidence: medium

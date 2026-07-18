@@ -1,0 +1,16 @@
+id: catalog.list-transformers
+name: List available transformers
+description: "The operator can list every transformer available to the current config — built-in and custom — with a short description of each, to discover what is available before writing transformation rules."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: none
+depends_on:
+  - transform.builtin-transformers
+  - transform.custom-transformers
+acceptance:
+  - "Running list-transformers prints every built-in transformer's name and short description"
+  - "Custom transformers declared in the loaded config file also appear in the listing"
+code:
+  - "TBD"
+confidence: high

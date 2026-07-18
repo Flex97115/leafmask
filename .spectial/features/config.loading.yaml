@@ -1,0 +1,14 @@
+id: config.loading
+name: Configuration file loading
+description: "The product loads its behavior from a single YAML config file, locatable either via a --config flag or the LEAFMASK_CONFIG environment variable, with environment variable interpolation inside config values and per-command flags/env vars overriding config values."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "A config file passed via --config is loaded and decoded into the running configuration"
+  - "When --config is not passed, the LEAFMASK_CONFIG environment variable is used to locate the config file instead"
+  - "A value like ${SOME_ENV_VAR} inside the config file is replaced with that environment variable's value before use"
+  - "An unknown key in the config file is rejected as an error rather than silently ignored"
+  - "Transformer params, which need special handling due to a known viper lower-casing issue, are parsed correctly regardless of key casing"
+code:
+  - "TBD"
+confidence: high

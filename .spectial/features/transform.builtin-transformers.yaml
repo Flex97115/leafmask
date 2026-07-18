@@ -1,0 +1,16 @@
+id: transform.builtin-transformers
+name: Built-in transformer library
+description: "The product ships a library of built-in transformers covering hashing, deterministic random generation (names, emails, addresses, dates, numbers, IPs, MAC addresses, ObjectIds/UUIDs, booleans, companies), noise addition, masking, regexp replace, dictionary lookup, value replacement, null-setting, embedded-document field transformation, and Go-template-based transformation, operating natively on BSON types (ObjectId, Decimal128, ISODate, binary)."
+level: internal
+depends_on:
+  - transform.parameter-framework
+  - transform.hash-engine
+acceptance:
+  - "Each built-in transformer is registered with a name, description, and typed parameter list discoverable via the transformer catalog"
+  - "Hash- and deterministic-random-based transformers produce the same output for the same input and the same seed/salt, across separate runs"
+  - "Noise transformers (date/float/int/numeric) perturb a value within a configurable range while keeping its BSON type"
+  - "Transformers that generate structured data (person, address, company) can populate multiple related output fields consistently"
+  - "An ObjectId-valued field can be deterministically transformed while remaining a valid ObjectId"
+code:
+  - "TBD"
+confidence: medium

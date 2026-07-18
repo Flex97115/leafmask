@@ -1,0 +1,12 @@
+id: storage.ssh-backend
+name: SSH/SFTP storage backend
+description: "The product can store and read dumps on a remote server over SFTP, configured with host, credentials, and a remote base path."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "Dumps written with storage.type=ssh are uploaded to the configured remote path over an SFTP connection"
+  - "Restoring, listing, and deleting dumps correctly read and modify files on the remote SFTP path"
+  - "The SFTP connection is established lazily rather than eagerly on every command startup"
+code:
+  - "TBD"
+confidence: medium

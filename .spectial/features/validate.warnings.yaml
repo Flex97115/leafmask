@@ -1,0 +1,12 @@
+id: validate.warnings
+name: Transformer configuration warnings
+description: "The product surfaces structured validation warnings about the transformer configuration (e.g. risky or ambiguous settings), which the operator can review and explicitly mark as resolved in the config so they stop being reported."
+level: internal
+depends_on: []
+acceptance:
+  - "A configuration issue detected during validation is reported as a distinct, identifiable warning rather than a generic error"
+  - "A warning whose identifier is listed under resolved_warnings in the config is no longer shown on subsequent runs"
+  - "With --warnings, all warnings are printed even if they would otherwise be summarized or suppressed"
+code:
+  - "TBD"
+confidence: medium

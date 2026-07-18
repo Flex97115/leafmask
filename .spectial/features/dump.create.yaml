@@ -1,0 +1,23 @@
+id: dump.create
+name: Create a logical database dump
+description: "The operator can produce a logical backup of a MongoDB database, including collection documents, indexes, and collection options, filtered by database/collection and optionally compressed and parallelized."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+depends_on:
+  - config.loading
+  - storage.backend-selection
+  - transform.apply-transformations
+  - subset.database-subsetting
+acceptance:
+  - "Running the dump command against a reachable MongoDB deployment produces a dump identified by a timestamp-based ID in the configured storage"
+  - "Database and collection include/exclude filters restrict what is dumped"
+  - "Index definitions and collection options (e.g. validators, capped-collection settings) are captured as part of the dump unless explicitly excluded"
+  - "Binary/large field values are captured as BSON binary data inline with the owning document, without requiring a separate GridFS pass"
+  - "Data can be compressed (gzip or pgzip) and dumped using multiple parallel jobs"
+  - "If common.tmp_dir is not configured, the dump fails fast with an explicit error instead of dumping"
+  - "Dumping a collection produces a point-in-time-consistent view of its documents even under concurrent writes, using a session snapshot"
+code:
+  - "TBD"
+confidence: medium
