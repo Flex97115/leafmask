@@ -7,5 +7,7 @@ acceptance:
   - "Running validate with --schema fetches the remote storage's recorded collection structure and diffs it against the live database's indexes and validators"
   - "A detected schema difference is reported to the operator rather than allowed to fail silently later in a dump"
 code:
-  - "TBD"
+  - "src/validate/schema_diff.rs"
+tests:
+  - "src/validate/schema_diff.rs (mod tests)"
 confidence: medium
