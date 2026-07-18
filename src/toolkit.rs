@@ -273,6 +273,61 @@ pub mod cast {
         }
     }
 
+    /// Cast a BSON value already read from a document into the type a
+    /// transformer expects (used for dynamic parameters resolved at transform
+    /// time). Mirrors [`yaml_to_typed`] but works from BSON.
+    pub fn bson_to_typed(v: &Bson, kind: ParamType) -> Result<Bson> {
+        match kind {
+            ParamType::Any => Ok(v.clone()),
+            ParamType::String => match v {
+                Bson::String(_) => Ok(v.clone()),
+                Bson::Int32(_) | Bson::Int64(_) | Bson::Double(_) | Bson::Boolean(_) => {
+                    Ok(Bson::String(v.to_string()))
+                }
+                _ => Err(Error::Parameter("value is not a string".into())),
+            },
+            ParamType::Int => to_i64(v)
+                .map(Bson::Int64)
+                .ok_or_else(|| Error::Parameter("value is not an integer".into())),
+            ParamType::Float => to_f64(v)
+                .map(Bson::Double)
+                .ok_or_else(|| Error::Parameter("value is not a float".into())),
+            ParamType::Bool => v
+                .as_bool()
+                .map(Bson::Boolean)
+                .ok_or_else(|| Error::Parameter("value is not a bool".into())),
+            ParamType::ObjectId => match v {
+                Bson::ObjectId(_) => Ok(v.clone()),
+                Bson::String(s) => ObjectId::parse_str(s)
+                    .map(Bson::ObjectId)
+                    .map_err(|e| Error::Parameter(format!("invalid objectId: {e}"))),
+                _ => Err(Error::Parameter("value is not an objectId".into())),
+            },
+            ParamType::DateTime => match v {
+                Bson::DateTime(_) => Ok(v.clone()),
+                Bson::String(s) => DateTime::parse_rfc3339_str(s)
+                    .map(Bson::DateTime)
+                    .map_err(|e| Error::Parameter(format!("invalid datetime: {e}"))),
+                _ => Err(Error::Parameter("value is not a datetime".into())),
+            },
+            ParamType::Decimal128 => match v {
+                Bson::Decimal128(_) => Ok(v.clone()),
+                Bson::String(s) => Decimal128::from_str(s)
+                    .map(Bson::Decimal128)
+                    .map_err(|e| Error::Parameter(format!("invalid decimal128: {e}"))),
+                _ => Err(Error::Parameter("value is not a decimal128".into())),
+            },
+            ParamType::Binary | ParamType::Bytes => match v {
+                Bson::Binary(_) => Ok(v.clone()),
+                Bson::String(s) => Ok(Bson::Binary(Binary {
+                    subtype: BinarySubtype::Generic,
+                    bytes: s.as_bytes().to_vec(),
+                })),
+                _ => Err(Error::Parameter("value is not binary".into())),
+            },
+        }
+    }
+
     fn scalar_to_string(v: &serde_yaml::Value) -> Option<String> {
         use serde_yaml::Value as Y;
         match v {

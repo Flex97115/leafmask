@@ -8,6 +8,7 @@
 
 pub mod builtin;
 pub mod custom;
+pub mod dynamic;
 
 use std::collections::BTreeMap;
 
