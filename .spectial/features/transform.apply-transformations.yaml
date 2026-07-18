@@ -15,5 +15,7 @@ acceptance:
   - "A collection can be restricted to a subset of documents via a custom filter query before transformation is applied"
   - "Field types can be overridden so a transformer can operate on a different logical type than the field's native BSON type"
 code:
-  - "TBD"
+  - "src/transform/apply.rs"
+tests:
+  - "src/transform/apply.rs (mod tests)"
 confidence: medium

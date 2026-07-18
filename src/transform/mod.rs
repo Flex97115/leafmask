@@ -6,6 +6,7 @@
 //! is both validated and discoverable through the catalog. Built-in and custom
 //! transformers share this machinery.
 
+pub mod apply;
 pub mod builtin;
 pub mod condition;
 pub mod custom;
@@ -115,6 +116,21 @@ impl Registry {
     /// Catalog docs for every registered transformer, sorted by name.
     pub fn docs(&self) -> Vec<TransformerDoc> {
         self.factories.values().map(TransformerFactory::doc).collect()
+    }
+
+    /// Build a transformer directly from already-resolved parameter values
+    /// (used by dynamic parameters, which merge per-document values before the
+    /// transformer is constructed).
+    pub fn build(
+        &self,
+        name: &str,
+        values: &ParamValues,
+        engine: &HashEngine,
+    ) -> Result<Box<dyn Transformer>> {
+        let factory = self
+            .get(name)
+            .ok_or_else(|| Error::NotFound(format!("transformer '{name}' not found")))?;
+        (factory.build)(values, engine)
     }
 
     /// Validate raw config params against the named transformer and build it.

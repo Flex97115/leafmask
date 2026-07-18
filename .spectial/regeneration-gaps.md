@@ -53,3 +53,9 @@ skill or the schema.
   assumed: a focused evaluator supporting field references, `== != > < >= <=`,
     `and`/`or`, and bare-field truthiness (no parentheses/arithmetic), which
     covers the documented conditional-transformation use.
+
+- feature: transform.apply-transformations
+  missing: the collection `query` is a MongoDB filter document.
+  assumed: pushed to MongoDB at read time in the real dump; the offline
+    should_include() matcher approximates it with equality-only matching for
+    testing without a database.

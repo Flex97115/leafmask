@@ -34,6 +34,23 @@ pub enum ParamType {
 }
 
 impl ParamType {
+    /// Parse a type name (as used by `type_override` and custom params).
+    pub fn from_name(name: &str) -> Option<ParamType> {
+        Some(match name {
+            "string" => ParamType::String,
+            "int" => ParamType::Int,
+            "float" => ParamType::Float,
+            "bool" => ParamType::Bool,
+            "bytes" => ParamType::Bytes,
+            "objectId" => ParamType::ObjectId,
+            "decimal128" => ParamType::Decimal128,
+            "datetime" => ParamType::DateTime,
+            "binary" => ParamType::Binary,
+            "any" => ParamType::Any,
+            _ => return None,
+        })
+    }
+
     /// Human-readable name for catalog output and error messages.
     pub fn name(&self) -> &'static str {
         match self {
