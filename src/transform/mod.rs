@@ -7,6 +7,7 @@
 //! transformers share this machinery.
 
 pub mod builtin;
+pub mod condition;
 pub mod custom;
 pub mod dynamic;
 

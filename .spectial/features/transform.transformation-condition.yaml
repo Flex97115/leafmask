@@ -9,5 +9,7 @@ acceptance:
   - "A collection-level `when` expression can skip transformation for the whole document"
   - "The condition expression can reference the document's own field values"
 code:
-  - "TBD"
+  - "src/transform/condition.rs"
+tests:
+  - "src/transform/condition.rs (mod tests)"
 confidence: medium

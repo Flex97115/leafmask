@@ -47,3 +47,9 @@ skill or the schema.
   assumed: the command driver exchanges one JSON value per line over
     stdin/stdout with a persistent process. Declared parameters are surfaced in
     the catalog but not forwarded to the process handshake.
+
+- feature: transform.transformation-condition
+  missing: the source uses a full expression language (Go expr) for `when`.
+  assumed: a focused evaluator supporting field references, `== != > < >= <=`,
+    `and`/`or`, and bare-field truthiness (no parentheses/arithmetic), which
+    covers the documented conditional-transformation use.
