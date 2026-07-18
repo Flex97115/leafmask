@@ -3,10 +3,6 @@
 Leafmask ships as a single self-contained binary. Choose whichever method suits
 you — all three give you the same tool.
 
-!!! info "Placeholder"
-    Replace `OWNER` in the commands below with the GitHub owner/org once the
-    repository is published.
-
 ## Install script
 
 The quickest way. The script detects your OS and architecture, downloads the
@@ -14,7 +10,7 @@ matching prebuilt binary from the latest GitHub Release, **verifies its
 checksum**, and installs it:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/OWNER/leafmask/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Flex97115/leafmask/main/install.sh | sh
 ```
 
 You can tune it with environment variables:
@@ -23,14 +19,14 @@ You can tune it with environment variables:
 | --- | --- | --- |
 | `LEAFMASK_VERSION` | latest release | install a specific tag, e.g. `v0.1.0` |
 | `LEAFMASK_INSTALL_DIR` | `/usr/local/bin` | where to install (falls back to `~/.local/bin`) |
-| `LEAFMASK_REPO` | `OWNER/leafmask` | source repository |
+| `LEAFMASK_REPO` | `Flex97115/leafmask` | source repository |
 
 Prebuilt targets: **Linux** and **macOS**, on **x86_64** and **arm64**.
 
 ```sh
 # a specific version, into a user-local dir
 LEAFMASK_VERSION=v0.1.0 LEAFMASK_INSTALL_DIR="$HOME/.local/bin" \
-  curl -fsSL https://raw.githubusercontent.com/OWNER/leafmask/main/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/Flex97115/leafmask/main/install.sh | sh
 ```
 
 ## Docker
@@ -39,7 +35,7 @@ Images are published to the GitHub Container Registry, multi-arch
 (`linux/amd64`, `linux/arm64`):
 
 ```sh
-docker run --rm ghcr.io/OWNER/leafmask:latest --help
+docker run --rm ghcr.io/flex97115/leafmask:latest --help
 ```
 
 Mount your config and a local dump directory to do real work:
@@ -48,7 +44,7 @@ Mount your config and a local dump directory to do real work:
 docker run --rm \
   -v "$PWD/leafmask.yaml:/cfg.yaml:ro" \
   -v "$PWD/dumps:/dumps" \
-  ghcr.io/OWNER/leafmask:latest --config /cfg.yaml list-dumps
+  ghcr.io/flex97115/leafmask:latest --config /cfg.yaml list-dumps
 ```
 
 !!! tip "Reaching MongoDB from the container"

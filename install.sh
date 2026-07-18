@@ -1,15 +1,15 @@
 #!/usr/bin/env sh
 # Leafmask installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/leafmask/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Flex97115/leafmask/main/install.sh | sh
 #
 # Environment overrides:
-#   LEAFMASK_REPO="OWNER/leafmask"   GitHub repo (owner/name)
+#   LEAFMASK_REPO="Flex97115/leafmask"   GitHub repo (owner/name)
 #   LEAFMASK_VERSION="v0.1.0"        specific tag (default: latest release)
 #   LEAFMASK_INSTALL_DIR="/usr/local/bin"   install location
 set -eu
 
-REPO="${LEAFMASK_REPO:-OWNER/leafmask}"
+REPO="${LEAFMASK_REPO:-Flex97115/leafmask}"
 BIN="leafmask"
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$1"; }

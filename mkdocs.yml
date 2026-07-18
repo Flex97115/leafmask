@@ -2,9 +2,9 @@ site_name: Leafmask
 site_description: >-
   Stateless CLI for logical MongoDB dumping, deterministic anonymization,
   referentially-intact subsetting, and restoration.
-site_url: https://OWNER.github.io/leafmask/
-repo_url: https://github.com/OWNER/leafmask
-repo_name: OWNER/leafmask
+site_url: https://flex97115.github.io/leafmask/
+repo_url: https://github.com/Flex97115/leafmask
+repo_name: Flex97115/leafmask
 edit_uri: edit/main/docs/
 copyright: Leafmask — Apache-2.0
 
