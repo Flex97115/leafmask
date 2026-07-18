@@ -28,9 +28,9 @@ skill or the schema.
   remaining: reads use a plain `find` — point-in-time snapshot sessions require a
     replica set (a standalone `mongod` rejects them), so the "session snapshot"
     consistency of `dump.create` is available only against a replica set. The CLI
-    `dump`/`restore`/`validate --data` subcommands are not yet wired to construct
-    a `MongoDriver`; the drivers are used programmatically and via the integration
-    tests.
+    `dump`/`restore`/`validate --data` subcommands are wired onto `MongoDriver`
+    (behind `--features mongo`) and verified end-to-end against a live server; a
+    non-`mongo` build shows them in `--help` but errors clearly when invoked.
 
 ## Data-model / behaviour assumptions
 

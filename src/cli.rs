@@ -1,6 +1,6 @@
-//! CLI definition and dispatch (populated per-feature).
+//! CLI definition and dispatch.
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 /// Leafmask command-line interface.
 #[derive(Debug, Parser)]
@@ -10,8 +10,94 @@ pub struct Cli {
     #[arg(long, global = true, env = "LEAFMASK_CONFIG")]
     pub config: Option<std::path::PathBuf>,
 
+    /// MongoDB connection URI (overrides `mongodb.uri` in config).
+    #[arg(long, global = true, env = "LEAFMASK_MONGO_URI")]
+    pub uri: Option<String>,
+
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// Flags for the `dump` command.
+#[derive(Debug, Args)]
+pub struct DumpArgs {
+    /// Compress collection data with gzip.
+    #[arg(long)]
+    pub gzip: bool,
+    /// Restrict to these databases (repeatable).
+    #[arg(long = "include-db")]
+    pub include_db: Vec<String>,
+    /// Skip these databases (repeatable).
+    #[arg(long = "exclude-db")]
+    pub exclude_db: Vec<String>,
+    /// Restrict to these collections (repeatable).
+    #[arg(long = "include-collection")]
+    pub include_collection: Vec<String>,
+    /// Skip these collections (repeatable).
+    #[arg(long = "exclude-collection")]
+    pub exclude_collection: Vec<String>,
+    /// Number of parallel jobs (accepted; execution is sequential).
+    #[arg(long, default_value_t = 1)]
+    pub jobs: usize,
+    /// Exclude index definitions and collection options.
+    #[arg(long)]
+    pub no_indexes: bool,
+}
+
+/// Flags for the `restore` command.
+#[derive(Debug, Args)]
+pub struct RestoreArgs {
+    /// Dump id to restore, or `latest`.
+    pub id: String,
+    #[arg(long = "include-collection")]
+    pub include_collection: Vec<String>,
+    #[arg(long = "exclude-collection")]
+    pub exclude_collection: Vec<String>,
+    #[arg(long = "include-index")]
+    pub include_index: Vec<String>,
+    #[arg(long = "exclude-index")]
+    pub exclude_index: Vec<String>,
+    /// Documents per bulk-insert batch.
+    #[arg(long, default_value_t = 1000)]
+    pub batch_size: usize,
+    /// Use ordered bulk writes.
+    #[arg(long)]
+    pub ordered: bool,
+    /// Create indexes/validators after documents.
+    #[arg(long)]
+    pub dependency_order: bool,
+    /// Abort the whole restore on a non-excluded error.
+    #[arg(long)]
+    pub exit_on_error: bool,
+}
+
+/// Flags for the `validate` command.
+#[derive(Debug, Args)]
+pub struct ValidateArgs {
+    /// Preview transformations against sampled documents.
+    #[arg(long)]
+    pub data: bool,
+    /// Database to sample from.
+    #[arg(long)]
+    pub database: String,
+    /// Collection to sample from.
+    #[arg(long)]
+    pub collection: String,
+    /// Maximum documents to sample.
+    #[arg(long, default_value_t = 10)]
+    pub rows_limit: usize,
+    /// Output format: text or json.
+    #[arg(long, default_value = "text")]
+    pub format: String,
+    /// Per-document layout: vertical or horizontal.
+    #[arg(long, default_value = "vertical")]
+    pub table_format: String,
+    /// Only show fields that have a transformer configured.
+    #[arg(long)]
+    pub transformed_only: bool,
+    /// Fail on any unresolved validation warning.
+    #[arg(long)]
+    pub strict: bool,
 }
 
 /// Top-level subcommands. Individual features flesh these out.
@@ -52,6 +138,12 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Create a logical dump of the configured MongoDB (requires --features mongo).
+    Dump(DumpArgs),
+    /// Restore a dump into the configured MongoDB (requires --features mongo).
+    Restore(RestoreArgs),
+    /// Validate/preview transformations against live data (requires --features mongo).
+    Validate(ValidateArgs),
 }
 
 /// Load the config if one was provided (or discoverable via env).
@@ -66,9 +158,42 @@ fn maybe_config(cli: &Cli) -> crate::Result<Option<crate::config::Config>> {
 /// Load config and open the configured storage backend (required for any
 /// command that reads or writes dumps).
 fn open_storage(cli: &Cli) -> crate::Result<std::sync::Arc<dyn crate::storage::Storage>> {
+    Ok(crate::storage::open_from_config(&require_config(cli)?.storage)?)
+}
+
+/// Load the config, erroring clearly if none was provided.
+fn require_config(cli: &Cli) -> crate::Result<crate::config::Config> {
     let path = crate::config::locate(cli.config.clone(), None)?;
-    let config = crate::config::load(&path)?;
-    crate::storage::open_from_config(&config.storage)
+    crate::config::load(&path)
+}
+
+/// Resolve the MongoDB URI: `--uri` wins, then `mongodb.uri` in config.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn resolve_uri(cli: &Cli, config: &crate::config::Config) -> crate::Result<String> {
+    cli.uri
+        .clone()
+        .or_else(|| config.mongodb.uri.clone())
+        .ok_or_else(|| {
+            crate::Error::Config("MongoDB URI required: pass --uri or set mongodb.uri".into())
+        })
+}
+
+/// Parse the `dump.transformation` section into a plan-ready config list.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn transformation_configs(
+    config: &crate::config::Config,
+) -> crate::Result<Vec<crate::transform::apply::TransformationConfig>> {
+    if config.dump.is_null() {
+        return Ok(Vec::new());
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DumpSection {
+        #[serde(default)]
+        transformation: Vec<crate::transform::apply::TransformationConfig>,
+    }
+    let section: DumpSection = serde_yaml::from_value(config.dump.clone())
+        .map_err(|e| crate::Error::Config(format!("dump.transformation: {e}")))?;
+    Ok(section.transformation)
 }
 
 /// Entry point invoked by `main`.
@@ -141,5 +266,167 @@ pub fn run(cli: Cli) -> crate::Result<()> {
             }
             Ok(())
         }
+        Command::Dump(args) => cmd_dump(&cli, args),
+        Command::Restore(args) => cmd_restore(&cli, args),
+        Command::Validate(args) => cmd_validate(&cli, args),
     }
+}
+
+// ---------------------------------------------------------------------------
+// MongoDB-backed commands. Compiled with the real driver only when the `mongo`
+// feature is enabled; otherwise they fail fast with an actionable message.
+// ---------------------------------------------------------------------------
+
+#[cfg(not(feature = "mongo"))]
+fn mongo_unavailable(cmd: &str) -> crate::Result<()> {
+    Err(crate::Error::Config(format!(
+        "`{cmd}` needs a MongoDB connection; rebuild leafmask with --features mongo"
+    )))
+}
+
+#[cfg(not(feature = "mongo"))]
+fn cmd_dump(_cli: &Cli, _args: &DumpArgs) -> crate::Result<()> {
+    mongo_unavailable("dump")
+}
+#[cfg(not(feature = "mongo"))]
+fn cmd_restore(_cli: &Cli, _args: &RestoreArgs) -> crate::Result<()> {
+    mongo_unavailable("restore")
+}
+#[cfg(not(feature = "mongo"))]
+fn cmd_validate(_cli: &Cli, _args: &ValidateArgs) -> crate::Result<()> {
+    mongo_unavailable("validate")
+}
+
+#[cfg(feature = "mongo")]
+fn engine_from(config: &crate::config::Config) -> crate::hash::HashEngine {
+    crate::hash::HashEngine::new(config.common.salt.clone().unwrap_or_else(|| "leafmask".into()))
+}
+
+#[cfg(feature = "mongo")]
+fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
+    use crate::dump::{Dump, DumpOptions};
+    use crate::transform::apply::TransformationPlan;
+
+    let config = require_config(cli)?;
+    let storage = crate::storage::open_from_config(&config.storage)?;
+    let driver = crate::mongo::MongoDriver::connect(&resolve_uri(cli, &config)?)?;
+    let registry = crate::catalog::build_registry(Some(&config))?;
+    let engine = engine_from(&config);
+
+    let configs = transformation_configs(&config)?;
+    let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
+
+    let options = DumpOptions {
+        tmp_dir: config.common.tmp_dir.clone(),
+        include_databases: args.include_db.clone(),
+        exclude_databases: args.exclude_db.clone(),
+        include_collections: args.include_collection.clone(),
+        exclude_collections: args.exclude_collection.clone(),
+        gzip: args.gzip,
+        parallel_jobs: args.jobs,
+        no_indexes: args.no_indexes,
+    };
+    let dump = Dump {
+        storage: storage.as_ref(),
+        source: &driver,
+        registry: &registry,
+        engine: &engine,
+        plan: if configs.is_empty() { None } else { Some(&plan) },
+        options,
+    };
+    let meta = dump.run(chrono::Utc::now())?;
+    println!("created dump {} ({} bytes)", meta.id, meta.size);
+    Ok(())
+}
+
+#[cfg(feature = "mongo")]
+fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> crate::Result<()> {
+    use crate::restore::{ErrorExclusions, ProcessScriptRunner, Restore, RestoreOptions, Scripts};
+
+    let config = require_config(cli)?;
+    let storage = crate::storage::open_from_config(&config.storage)?;
+    let uri = resolve_uri(cli, &config)?;
+    let driver = crate::mongo::MongoDriver::connect(&uri)?;
+
+    #[derive(serde::Deserialize, Default)]
+    struct RestoreSection {
+        #[serde(default)]
+        insert_error_exclusions: ErrorExclusions,
+        #[serde(default)]
+        scripts: Scripts,
+    }
+    let section: RestoreSection = if config.restore.is_null() {
+        RestoreSection::default()
+    } else {
+        serde_yaml::from_value(config.restore.clone())
+            .map_err(|e| crate::Error::Config(format!("restore: {e}")))?
+    };
+
+    let options = RestoreOptions {
+        include_collections: args.include_collection.clone(),
+        exclude_collections: args.exclude_collection.clone(),
+        include_indexes: args.include_index.clone(),
+        exclude_indexes: args.exclude_index.clone(),
+        batch_size: args.batch_size,
+        ordered: args.ordered,
+        dependency_order: args.dependency_order,
+        exit_on_error: args.exit_on_error,
+    };
+    let restore = Restore {
+        storage: storage.as_ref(),
+        sink: &driver,
+        exclusions: section.insert_error_exclusions,
+        scripts: section.scripts,
+        options,
+    };
+    let report = restore.run(&args.id, &ProcessScriptRunner::new(uri))?;
+    println!(
+        "restored: {} inserted, {} skipped, {} indexes",
+        report.inserted, report.skipped, report.indexes_created
+    );
+    Ok(())
+}
+
+#[cfg(feature = "mongo")]
+fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
+    use crate::mongo::MongoSource;
+    use crate::transform::apply::TransformationPlan;
+    use crate::validate::{parse_format, parse_table_format, preview, PreviewOptions, Warnings};
+
+    if !args.data {
+        return Err(crate::Error::Validation(
+            "nothing to do: pass --data to preview transformations".into(),
+        ));
+    }
+    // Validate output options up front, before any database work.
+    let format = parse_format(&args.format)?;
+    let table_format = parse_table_format(&args.table_format)?;
+
+    let config = require_config(cli)?;
+    let driver = crate::mongo::MongoDriver::connect(&resolve_uri(cli, &config)?)?;
+    let registry = crate::catalog::build_registry(Some(&config))?;
+    let engine = engine_from(&config);
+    let configs = transformation_configs(&config)?;
+    let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
+
+    let docs = driver.read_collection(&args.database, &args.collection)?.documents;
+    let opts = PreviewOptions {
+        rows_limit: args.rows_limit,
+        format,
+        table_format,
+        transformed_only: args.transformed_only,
+        strict: args.strict,
+    };
+    let out = preview(
+        &plan,
+        &registry,
+        &engine,
+        &args.collection,
+        &docs,
+        &Warnings::new(),
+        &config.resolved_warnings,
+        &opts,
+    )?;
+    print!("{out}");
+    Ok(())
 }

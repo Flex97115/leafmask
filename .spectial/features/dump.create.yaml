@@ -19,6 +19,7 @@ acceptance:
   - "If common.tmp_dir is not configured, the dump fails fast with an explicit error instead of dumping"
   - "Dumping a collection produces a point-in-time-consistent view of its documents even under concurrent writes, using a session snapshot"
 code:
+  - "src/cli.rs"
   - "src/dump/create.rs"
   - "src/mongo.rs"
 tests:

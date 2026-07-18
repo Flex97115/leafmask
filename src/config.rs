@@ -82,6 +82,9 @@ pub struct Common {
     /// Temporary working directory; required before a real dump runs.
     #[serde(default)]
     pub tmp_dir: Option<String>,
+    /// Stable salt/seed for deterministic transformations across runs.
+    #[serde(default)]
+    pub salt: Option<String>,
 }
 
 /// The `storage` config section — a discriminated backend plus its raw params.
@@ -96,12 +99,23 @@ pub struct StorageConfig {
     pub params: Params,
 }
 
+/// The `mongodb` config section — how to reach the target deployment.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct MongoConfig {
+    /// Connection URI, e.g. `mongodb://localhost:27017`.
+    #[serde(default)]
+    pub uri: Option<String>,
+}
+
 /// Root configuration document.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub common: Common,
+    #[serde(default)]
+    pub mongodb: MongoConfig,
     #[serde(default)]
     pub storage: StorageConfig,
     /// Warning identifiers the operator has explicitly resolved.

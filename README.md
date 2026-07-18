@@ -13,7 +13,7 @@ dependency graph, and acceptance criteria.
 
 ## What it does
 
-Runnable CLI commands today (they only touch config + storage, no MongoDB):
+Storage-only commands (no MongoDB needed — work in any build):
 
 - **`list-transformers`** — list every available transformer (built-in and any
   custom ones declared in the config), each with a short description.
@@ -25,21 +25,18 @@ Runnable CLI commands today (they only touch config + storage, no MongoDB):
   (`--retain-recent`, `--before-date`, `--prune-failed`, `--prune-unsafe`), with
   `--dry-run`.
 
-Feature-complete as **library drivers** — implemented, unit-tested against an
-in-memory MongoDB, and exercised end-to-end against a **real MongoDB** via the
-`mongo`-feature integration tests. (Not yet wired as CLI subcommands — they are
-used programmatically and from the integration tests.)
+MongoDB commands (built with `--features mongo`; a clear error otherwise):
 
-- **Dump** — logical dump with collection filters, inline BSON binary,
-  index/option capture, optional gzip, transformations + subsetting applied
-  while streaming (`dump::Dump`).
-- **Restore** — restore a dump into a target MongoDB with filters, ordering,
-  batching, error exclusions, and pre/post scripts (`restore::Restore`).
-- **Transformation preview** (`validate --data`) — before/after diff of the
-  configured transformations over a sample, in text/JSON, without dumping
-  (`validate::preview`).
+- **`dump`** — logical dump with db/collection filters, inline BSON binary,
+  index/option capture, optional `--gzip`, transformations applied while
+  streaming.
+- **`restore <id|latest>`** — restore a dump into MongoDB with filters,
+  `--dependency-order`, batching, error exclusions, and pre/post scripts.
+- **`validate --data`** — before/after diff of the configured transformations
+  over a sample (`--format text|json`, `--table-format vertical|horizontal`,
+  `--transformed-only`, `--strict`), without dumping.
 - **Database subsetting** — dump only a filtered subset while following declared
-  virtual references (including cyclic and polymorphic ones) so the result stays
+  virtual references (including cyclic and polymorphic ones), keeping the result
   referentially consistent (`subset::SubsetEngine`).
 
 ## Stack
@@ -94,6 +91,32 @@ Cloud backends require building with their feature, e.g.:
 
 ```sh
 cargo run --features s3 -- --config leafmask.yaml list-dumps
+```
+
+The MongoDB commands need the `mongo` feature and a `mongodb.uri` in config (or
+`--uri` / `LEAFMASK_MONGO_URI`):
+
+```sh
+cargo run --features mongo -- --config leafmask.yaml dump --include-db shop --gzip
+cargo run --features mongo -- --config leafmask.yaml validate --data \
+    --database shop --collection users --transformed-only
+cargo run --features mongo -- --config leafmask.yaml restore latest --dependency-order
+```
+
+Config additions for MongoDB work:
+
+```yaml
+common:
+  tmp_dir: ./tmp        # required for `dump`
+  salt: pepper          # stable seed for deterministic transformations
+mongodb:
+  uri: mongodb://localhost:27017
+dump:
+  transformation:
+    - collection: users
+      transformers:
+        - field: email
+          name: random_email   # uniqueness-preserving (safe under a unique index)
 ```
 
 ## Test
