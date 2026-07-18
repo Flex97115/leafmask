@@ -128,7 +128,13 @@ mod imp {
             let key = self.cfg.object_key(path);
             let resp = self
                 .rt
-                .block_on(self.client.get_object().bucket(&self.cfg.bucket).key(&key).send())
+                .block_on(
+                    self.client
+                        .get_object()
+                        .bucket(&self.cfg.bucket)
+                        .key(&key)
+                        .send(),
+                )
                 .map_err(|_| Error::NotFound(format!("blob '{path}' not found")))?;
             let bytes = self
                 .rt
@@ -156,7 +162,13 @@ mod imp {
             let key = self.cfg.object_key(path);
             Ok(self
                 .rt
-                .block_on(self.client.head_object().bucket(&self.cfg.bucket).key(&key).send())
+                .block_on(
+                    self.client
+                        .head_object()
+                        .bucket(&self.cfg.bucket)
+                        .key(&key)
+                        .send(),
+                )
                 .is_ok())
         }
 
@@ -164,7 +176,13 @@ mod imp {
             for rel in self.list(prefix)? {
                 let key = self.cfg.object_key(&rel);
                 self.rt
-                    .block_on(self.client.delete_object().bucket(&self.cfg.bucket).key(&key).send())
+                    .block_on(
+                        self.client
+                            .delete_object()
+                            .bucket(&self.cfg.bucket)
+                            .key(&key)
+                            .send(),
+                    )
                     .map_err(|e| Error::Storage(e.to_string()))?;
             }
             Ok(())
@@ -205,7 +223,11 @@ mod imp {
                         .send(),
                 )
                 .map_err(|e| Error::Storage(e.to_string()))?;
-            Ok(resp.contents().iter().map(|o| o.size().unwrap_or(0).max(0) as u64).sum())
+            Ok(resp
+                .contents()
+                .iter()
+                .map(|o| o.size().unwrap_or(0).max(0) as u64)
+                .sum())
         }
     }
 }
@@ -223,7 +245,10 @@ mod tests {
     fn parses_bucket_and_prefix_and_builds_keys() {
         let cfg = S3Config::from_params(&params("bucket: dumps\nprefix: leafmask\n")).unwrap();
         assert_eq!(cfg.bucket, "dumps");
-        assert_eq!(cfg.object_key("dump-1/metadata.json"), "leafmask/dump-1/metadata.json");
+        assert_eq!(
+            cfg.object_key("dump-1/metadata.json"),
+            "leafmask/dump-1/metadata.json"
+        );
 
         // no prefix -> key is the path itself.
         let cfg = S3Config::from_params(&params("bucket: b\n")).unwrap();

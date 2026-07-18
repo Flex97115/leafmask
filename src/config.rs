@@ -264,6 +264,9 @@ mod tests {
         assert_eq!(keys, vec!["Column", "KEEP_Null"]);
         // ...and lookup is case-insensitive.
         assert_eq!(params.get("column").and_then(|v| v.as_str()), Some("email"));
-        assert_eq!(params.get("keep_null").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            params.get("keep_null").and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 }

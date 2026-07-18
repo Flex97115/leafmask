@@ -109,7 +109,11 @@ mod tests {
     fn unknown_type_fails_fast() {
         let cfg = storage_cfg("storage:\n  type: gdrive\n");
         let err = expect_err(&cfg);
-        assert!(err.to_string().contains("unsupported storage.type 'gdrive'"), "{err}");
+        assert!(
+            err.to_string()
+                .contains("unsupported storage.type 'gdrive'"),
+            "{err}"
+        );
 
         // missing type is also an error, not a silent default.
         let cfg = storage_cfg("storage: {}\n");

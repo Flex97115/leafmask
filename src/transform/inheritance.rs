@@ -43,7 +43,10 @@ impl FieldTransform {
 /// Expand explicit transformations with inherited ones derived from the
 /// reference graph. Explicit transforms always win; inherited transforms are
 /// added only for referencing fields that have no explicit transform.
-pub fn expand_inherited(explicit: &[FieldTransform], graph: &ReferenceGraph) -> Vec<FieldTransform> {
+pub fn expand_inherited(
+    explicit: &[FieldTransform],
+    graph: &ReferenceGraph,
+) -> Vec<FieldTransform> {
     let has_explicit = |collection: &str, field: &str| {
         explicit
             .iter()
@@ -56,7 +59,10 @@ pub fn expand_inherited(explicit: &[FieldTransform], graph: &ReferenceGraph) -> 
         for edge in graph.edges() {
             // Does this edge point at the transformed (collection, field)?
             let points_here = edge.to_field == src.field
-                && edge.target_collections().iter().any(|c| c == &src.collection);
+                && edge
+                    .target_collections()
+                    .iter()
+                    .any(|c| c == &src.collection);
             if !points_here {
                 continue;
             }
@@ -64,7 +70,9 @@ pub fn expand_inherited(explicit: &[FieldTransform], graph: &ReferenceGraph) -> 
             // or we already added it.
             if has_explicit(&edge.from_collection, &edge.from_field)
                 || out.iter().any(|t| {
-                    t.collection == edge.from_collection && t.field == edge.from_field && t.inherited
+                    t.collection == edge.from_collection
+                        && t.field == edge.from_field
+                        && t.inherited
                 })
             {
                 continue;

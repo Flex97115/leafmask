@@ -211,9 +211,14 @@ mod tests {
         let s = DirectoryStorage::new(dir.path()).unwrap();
         let m = source_with_users();
         let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
-        let opts = DumpOptions { tmp_dir: Some("/tmp".into()), ..Default::default() };
+        let opts = DumpOptions {
+            tmp_dir: Some("/tmp".into()),
+            ..Default::default()
+        };
 
-        let meta = dump(&s, &m, &r, &e, opts).run(at("2026-07-18T12:00:00Z")).unwrap();
+        let meta = dump(&s, &m, &r, &e, opts)
+            .run(at("2026-07-18T12:00:00Z"))
+            .unwrap();
         assert_eq!(meta.id, "20260718T120000Z");
         assert_eq!(meta.status, DumpStatus::Done);
 
@@ -246,7 +251,9 @@ mod tests {
             exclude_collections: vec!["secrets".into()],
             ..Default::default()
         };
-        let meta = dump(&s, &m, &r, &e, opts).run(at("2026-07-18T12:00:00Z")).unwrap();
+        let meta = dump(&s, &m, &r, &e, opts)
+            .run(at("2026-07-18T12:00:00Z"))
+            .unwrap();
         let names: Vec<&str> = meta.databases[0]
             .collections
             .iter()
@@ -266,7 +273,10 @@ mod tests {
         d.insert("_id", Bson::Int64(1));
         d.insert(
             "blob",
-            Bson::Binary(Binary { subtype: BinarySubtype::Generic, bytes: vec![1, 2, 3, 4, 5] }),
+            Bson::Binary(Binary {
+                subtype: BinarySubtype::Generic,
+                bytes: vec![1, 2, 3, 4, 5],
+            }),
         );
         m.seed(CollectionData {
             database: "app".into(),
@@ -275,8 +285,14 @@ mod tests {
             ..Default::default()
         });
         let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
-        let opts = DumpOptions { tmp_dir: Some("/tmp".into()), gzip: true, ..Default::default() };
-        let meta = dump(&s, &m, &r, &e, opts).run(at("2026-07-18T12:00:00Z")).unwrap();
+        let opts = DumpOptions {
+            tmp_dir: Some("/tmp".into()),
+            gzip: true,
+            ..Default::default()
+        };
+        let meta = dump(&s, &m, &r, &e, opts)
+            .run(at("2026-07-18T12:00:00Z"))
+            .unwrap();
 
         let full = read_collection_full(&s, &meta.id, "app", "files").unwrap();
         assert_eq!(full.documents[0], d);
@@ -289,8 +305,13 @@ mod tests {
         let s = DirectoryStorage::new(dir.path()).unwrap();
         let m = source_with_users();
         let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
-        let opts = DumpOptions { tmp_dir: None, ..Default::default() };
-        let err = dump(&s, &m, &r, &e, opts).run(at("2026-07-18T12:00:00Z")).unwrap_err();
+        let opts = DumpOptions {
+            tmp_dir: None,
+            ..Default::default()
+        };
+        let err = dump(&s, &m, &r, &e, opts)
+            .run(at("2026-07-18T12:00:00Z"))
+            .unwrap_err();
         assert!(err.to_string().contains("tmp_dir"), "{err}");
     }
 
@@ -313,7 +334,10 @@ mod tests {
             registry: &r,
             engine: &e,
             plan: Some(&plan),
-            options: DumpOptions { tmp_dir: Some("/tmp".into()), ..Default::default() },
+            options: DumpOptions {
+                tmp_dir: Some("/tmp".into()),
+                ..Default::default()
+            },
         };
         let meta = d.run(at("2026-07-18T12:00:00Z")).unwrap();
         let full = read_collection_full(&s, &meta.id, "app", "users").unwrap();

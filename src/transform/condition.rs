@@ -43,7 +43,9 @@ fn eval_or(expr: &str, doc: &Document) -> bool {
 }
 
 fn eval_and(expr: &str, doc: &Document) -> bool {
-    split_top(expr, " and ").iter().all(|c| eval_term(c.trim(), doc))
+    split_top(expr, " and ")
+        .iter()
+        .all(|c| eval_term(c.trim(), doc))
 }
 
 /// Split on `sep`, but only outside of single/double quotes.
@@ -224,13 +226,28 @@ mod tests {
     #[test]
     fn numeric_and_boolean_composition() {
         let c = Condition::parse("age >= 18 and country == 'US'").unwrap();
-        assert!(c.eval(&doc(&[("age", Bson::Int64(21)), ("country", Bson::String("US".into()))])));
-        assert!(!c.eval(&doc(&[("age", Bson::Int64(16)), ("country", Bson::String("US".into()))])));
+        assert!(c.eval(&doc(&[
+            ("age", Bson::Int64(21)),
+            ("country", Bson::String("US".into()))
+        ])));
+        assert!(!c.eval(&doc(&[
+            ("age", Bson::Int64(16)),
+            ("country", Bson::String("US".into()))
+        ])));
 
         let c = Condition::parse("age < 13 or vip == true").unwrap();
-        assert!(c.eval(&doc(&[("age", Bson::Int64(10)), ("vip", Bson::Boolean(false))])));
-        assert!(c.eval(&doc(&[("age", Bson::Int64(40)), ("vip", Bson::Boolean(true))])));
-        assert!(!c.eval(&doc(&[("age", Bson::Int64(40)), ("vip", Bson::Boolean(false))])));
+        assert!(c.eval(&doc(&[
+            ("age", Bson::Int64(10)),
+            ("vip", Bson::Boolean(false))
+        ])));
+        assert!(c.eval(&doc(&[
+            ("age", Bson::Int64(40)),
+            ("vip", Bson::Boolean(true))
+        ])));
+        assert!(!c.eval(&doc(&[
+            ("age", Bson::Int64(40)),
+            ("vip", Bson::Boolean(false))
+        ])));
     }
 
     // Acceptance: a collection-level `when` can skip the whole document — same

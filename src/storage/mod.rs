@@ -5,11 +5,11 @@
 //! runtime from config (`storage.type`). The local directory backend is always
 //! available; the S3, Azure, and SSH backends are behind cargo features.
 
+pub mod azure;
 pub mod directory;
 pub mod s3;
-pub mod azure;
-pub mod ssh;
 pub mod selection;
+pub mod ssh;
 
 pub use directory::DirectoryStorage;
 pub use selection::open_from_config;

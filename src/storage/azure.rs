@@ -169,7 +169,10 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(cfg.container, "backups");
-        assert_eq!(cfg.blob_name("dump-1/metadata.json"), "leafmask/dump-1/metadata.json");
+        assert_eq!(
+            cfg.blob_name("dump-1/metadata.json"),
+            "leafmask/dump-1/metadata.json"
+        );
     }
 
     #[test]

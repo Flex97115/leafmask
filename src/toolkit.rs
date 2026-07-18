@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
-use bson::{Binary, Bson, DateTime, Decimal128, oid::ObjectId, spec::BinarySubtype};
+use bson::{oid::ObjectId, spec::BinarySubtype, Binary, Bson, DateTime, Decimal128};
 
 use crate::config::Params;
 use crate::error::{Error, Result};
@@ -245,10 +245,12 @@ pub mod cast {
                 .ok_or_else(|| Error::Parameter("not a bool".into())),
             ParamType::Bytes => v
                 .as_str()
-                .map(|s| Bson::Binary(Binary {
-                    subtype: BinarySubtype::Generic,
-                    bytes: s.as_bytes().to_vec(),
-                }))
+                .map(|s| {
+                    Bson::Binary(Binary {
+                        subtype: BinarySubtype::Generic,
+                        bytes: s.as_bytes().to_vec(),
+                    })
+                })
                 .ok_or_else(|| Error::Parameter("bytes must be given as a string".into())),
             ParamType::ObjectId => {
                 let s = v
@@ -282,10 +284,12 @@ pub mod cast {
             }
             ParamType::Binary => v
                 .as_str()
-                .map(|s| Bson::Binary(Binary {
-                    subtype: BinarySubtype::Generic,
-                    bytes: s.as_bytes().to_vec(),
-                }))
+                .map(|s| {
+                    Bson::Binary(Binary {
+                        subtype: BinarySubtype::Generic,
+                        bytes: s.as_bytes().to_vec(),
+                    })
+                })
                 .ok_or_else(|| Error::Parameter("binary must be given as a string".into())),
         }
     }
@@ -375,7 +379,10 @@ pub mod cast {
                 let mut doc = bson::Document::new();
                 for (k, val) in m {
                     let key = k.as_str().map(str::to_string).unwrap_or_else(|| {
-                        serde_yaml::to_string(k).unwrap_or_default().trim().to_string()
+                        serde_yaml::to_string(k)
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string()
                     });
                     doc.insert(key, yaml_to_bson(val));
                 }
@@ -400,7 +407,11 @@ mod tests {
     // at config-validation time.
     #[test]
     fn rejects_uncastable_value() {
-        let defs = [ParamDefinition::required("count", ParamType::Int, "how many")];
+        let defs = [ParamDefinition::required(
+            "count",
+            ParamType::Int,
+            "how many",
+        )];
         let err = validate_static(&defs, &params("count: not-a-number\n")).unwrap_err();
         assert!(err.to_string().contains("count"), "{err}");
 
@@ -417,8 +428,7 @@ mod tests {
             ParamDefinition::required("min", ParamType::Int, "lower"),
             ParamDefinition::optional("keep_null", ParamType::Bool, Bson::Boolean(true), "n"),
         ];
-        let values =
-            validate_static(&defs, &params("column: email\nmin: 3\n")).unwrap();
+        let values = validate_static(&defs, &params("column: email\nmin: 3\n")).unwrap();
         assert_eq!(values.get_str("column"), Some("email"));
         assert_eq!(values.get_i64("min"), Some(3));
         // default applied when not provided.
@@ -443,7 +453,11 @@ mod tests {
 
         // decimal128, datetime, binary all decode from strings.
         assert!(matches!(
-            yaml_to_typed(&serde_yaml::Value::String("3.14".into()), ParamType::Decimal128).unwrap(),
+            yaml_to_typed(
+                &serde_yaml::Value::String("3.14".into()),
+                ParamType::Decimal128
+            )
+            .unwrap(),
             Bson::Decimal128(_)
         ));
         assert!(matches!(
@@ -466,8 +480,11 @@ mod tests {
 
     #[test]
     fn invalid_objectid_rejected() {
-        let err = yaml_to_typed(&serde_yaml::Value::String("zzz".into()), ParamType::ObjectId)
-            .unwrap_err();
+        let err = yaml_to_typed(
+            &serde_yaml::Value::String("zzz".into()),
+            ParamType::ObjectId,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("objectId"), "{err}");
     }
 }

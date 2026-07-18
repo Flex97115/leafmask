@@ -45,7 +45,10 @@ impl ScriptSpec {
         let set = [
             self.query.is_some(),
             self.query_file.is_some(),
-            self.command.as_ref().map(|c| !c.is_empty()).unwrap_or(false),
+            self.command
+                .as_ref()
+                .map(|c| !c.is_empty())
+                .unwrap_or(false),
         ]
         .iter()
         .filter(|b| **b)
@@ -126,7 +129,9 @@ impl ProcessScriptRunner {
         if status.success() {
             Ok(())
         } else {
-            Err(Error::Restore(format!("script {what} failed with {status}")))
+            Err(Error::Restore(format!(
+                "script {what} failed with {status}"
+            )))
         }
     }
 }

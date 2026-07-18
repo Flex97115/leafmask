@@ -120,11 +120,14 @@ pub fn write_metadata(storage: &dyn Storage, meta: &DumpMetadata) -> Result<()> 
 /// Read one dump's metadata from storage. Errors with `NotFound` if the dump or
 /// its metadata is absent.
 pub fn read_metadata(storage: &dyn Storage, id: &str) -> Result<DumpMetadata> {
-    let bytes = storage.get(&DumpMetadata::metadata_path(id)).map_err(|e| match e {
-        Error::NotFound(_) => Error::NotFound(format!("dump '{id}' not found")),
-        other => other,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|e| Error::Storage(format!("corrupt metadata for '{id}': {e}")))
+    let bytes = storage
+        .get(&DumpMetadata::metadata_path(id))
+        .map_err(|e| match e {
+            Error::NotFound(_) => Error::NotFound(format!("dump '{id}' not found")),
+            other => other,
+        })?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| Error::Storage(format!("corrupt metadata for '{id}': {e}")))
 }
 
 /// Read metadata for every dump present in storage. Dumps whose metadata cannot
@@ -181,7 +184,8 @@ pub fn write_collection_data(
     let raw = bson::to_vec(data).map_err(|e| Error::Storage(e.to_string()))?;
     let bytes = if gzip {
         let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        enc.write_all(&raw).map_err(|e| Error::Storage(e.to_string()))?;
+        enc.write_all(&raw)
+            .map_err(|e| Error::Storage(e.to_string()))?;
         enc.finish().map_err(|e| Error::Storage(e.to_string()))?
     } else {
         raw
@@ -215,7 +219,8 @@ pub fn read_collection_full(
     let raw = if gz {
         let mut dec = flate2::read::GzDecoder::new(&bytes[..]);
         let mut out = Vec::new();
-        dec.read_to_end(&mut out).map_err(|e| Error::Storage(e.to_string()))?;
+        dec.read_to_end(&mut out)
+            .map_err(|e| Error::Storage(e.to_string()))?;
         out
     } else {
         bytes
@@ -261,8 +266,16 @@ mod tests {
     fn writes_reads_and_resolves() {
         let dir = tempfile::tempdir().unwrap();
         let s = DirectoryStorage::new(dir.path()).unwrap();
-        write_metadata(&s, &meta("20260101T000000Z", DumpStatus::Done, "2026-01-01T00:00:00Z")).unwrap();
-        write_metadata(&s, &meta("20260102T000000Z", DumpStatus::Done, "2026-01-02T00:00:00Z")).unwrap();
+        write_metadata(
+            &s,
+            &meta("20260101T000000Z", DumpStatus::Done, "2026-01-01T00:00:00Z"),
+        )
+        .unwrap();
+        write_metadata(
+            &s,
+            &meta("20260102T000000Z", DumpStatus::Done, "2026-01-02T00:00:00Z"),
+        )
+        .unwrap();
 
         let read = read_metadata(&s, "20260101T000000Z").unwrap();
         assert_eq!(read.status, DumpStatus::Done);

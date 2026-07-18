@@ -97,7 +97,9 @@ mod tests {
         assert!(text.contains("max : int (required)"));
 
         // a paramless transformer is rendered clearly.
-        assert!(show(&registry, "set_null").unwrap().contains("no parameters"));
+        assert!(show(&registry, "set_null")
+            .unwrap()
+            .contains("no parameters"));
     }
 
     // Acceptance (show): an unknown name fails with a clear not-found error.

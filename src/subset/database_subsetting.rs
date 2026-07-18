@@ -132,7 +132,10 @@ mod tests {
     }
     impl MemSource {
         fn insert(&mut self, collection: &str, doc: Document) {
-            self.data.entry(collection.to_string()).or_default().push(doc);
+            self.data
+                .entry(collection.to_string())
+                .or_default()
+                .push(doc);
         }
     }
     impl DocumentSource for MemSource {
@@ -159,7 +162,10 @@ mod tests {
         ReferenceGraph::from_entries(&entries)
     }
     fn conds(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     // Acceptance: subset_conds selects only matching docs; referenced docs in
@@ -170,10 +176,36 @@ mod tests {
             "- collection: orders\n  references:\n    - field: user_id\n      references_collection: users\n",
         );
         let mut src = MemSource::default();
-        src.insert("orders", doc(&[("_id", Bson::Int64(1)), ("user_id", Bson::Int64(10)), ("region", Bson::String("EU".into()))]));
-        src.insert("orders", doc(&[("_id", Bson::Int64(2)), ("user_id", Bson::Int64(20)), ("region", Bson::String("US".into()))]));
-        src.insert("users", doc(&[("_id", Bson::Int64(10)), ("name", Bson::String("eu-user".into()))]));
-        src.insert("users", doc(&[("_id", Bson::Int64(20)), ("name", Bson::String("us-user".into()))]));
+        src.insert(
+            "orders",
+            doc(&[
+                ("_id", Bson::Int64(1)),
+                ("user_id", Bson::Int64(10)),
+                ("region", Bson::String("EU".into())),
+            ]),
+        );
+        src.insert(
+            "orders",
+            doc(&[
+                ("_id", Bson::Int64(2)),
+                ("user_id", Bson::Int64(20)),
+                ("region", Bson::String("US".into())),
+            ]),
+        );
+        src.insert(
+            "users",
+            doc(&[
+                ("_id", Bson::Int64(10)),
+                ("name", Bson::String("eu-user".into())),
+            ]),
+        );
+        src.insert(
+            "users",
+            doc(&[
+                ("_id", Bson::Int64(20)),
+                ("name", Bson::String("us-user".into())),
+            ]),
+        );
 
         let engine = SubsetEngine::new(&g, &conds(&[("orders", "region == 'EU'")])).unwrap();
         let out = engine.compute(&src);
@@ -195,12 +227,22 @@ mod tests {
         );
         let mut src = MemSource::default();
         // 1 -> 2 -> 1 cycle.
-        src.insert("users", doc(&[("_id", Bson::Int64(1)), ("manager_id", Bson::Int64(2)), ("seed", Bson::Boolean(true))]));
-        src.insert("users", doc(&[("_id", Bson::Int64(2)), ("manager_id", Bson::Int64(1))]));
+        src.insert(
+            "users",
+            doc(&[
+                ("_id", Bson::Int64(1)),
+                ("manager_id", Bson::Int64(2)),
+                ("seed", Bson::Boolean(true)),
+            ]),
+        );
+        src.insert(
+            "users",
+            doc(&[("_id", Bson::Int64(2)), ("manager_id", Bson::Int64(1))]),
+        );
 
         let engine = SubsetEngine::new(&g, &conds(&[("users", "seed == true")])).unwrap();
         let out = engine.compute(&src); // must not hang
-        // both users are included exactly once.
+                                        // both users are included exactly once.
         assert_eq!(out["users"].len(), 2);
     }
 
@@ -211,8 +253,24 @@ mod tests {
             "- collection: comments\n  references:\n    - field: parent_id\n      polymorphic_exprs:\n        - field: parent_type\n          value: post\n          references_collection: posts\n        - field: parent_type\n          value: photo\n          references_collection: photos\n",
         );
         let mut src = MemSource::default();
-        src.insert("comments", doc(&[("_id", Bson::Int64(1)), ("parent_id", Bson::Int64(100)), ("parent_type", Bson::String("post".into())), ("keep", Bson::Boolean(true))]));
-        src.insert("comments", doc(&[("_id", Bson::Int64(2)), ("parent_id", Bson::Int64(200)), ("parent_type", Bson::String("photo".into())), ("keep", Bson::Boolean(true))]));
+        src.insert(
+            "comments",
+            doc(&[
+                ("_id", Bson::Int64(1)),
+                ("parent_id", Bson::Int64(100)),
+                ("parent_type", Bson::String("post".into())),
+                ("keep", Bson::Boolean(true)),
+            ]),
+        );
+        src.insert(
+            "comments",
+            doc(&[
+                ("_id", Bson::Int64(2)),
+                ("parent_id", Bson::Int64(200)),
+                ("parent_type", Bson::String("photo".into())),
+                ("keep", Bson::Boolean(true)),
+            ]),
+        );
         src.insert("posts", doc(&[("_id", Bson::Int64(100))]));
         src.insert("photos", doc(&[("_id", Bson::Int64(200))]));
         src.insert("posts", doc(&[("_id", Bson::Int64(999))])); // unrelated

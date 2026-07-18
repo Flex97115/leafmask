@@ -93,9 +93,8 @@ impl DynamicParams {
                     b.param, b.field
                 ))
             })?;
-            let typed = cast::bson_to_typed(raw, b.kind).map_err(|e| {
-                Error::Parameter(format!("dynamic parameter '{}': {e}", b.param))
-            })?;
+            let typed = cast::bson_to_typed(raw, b.kind)
+                .map_err(|e| Error::Parameter(format!("dynamic parameter '{}': {e}", b.param)))?;
             values.insert(b.param.clone(), typed);
         }
         Ok(values)
@@ -155,12 +154,16 @@ mod tests {
     #[test]
     fn unknown_field_is_a_validation_error() {
         let dp = DynamicParams::from_config(&cfg("min:\n  field: nope\n"), &defs()).unwrap();
-        let known: HashSet<String> = ["created_at".to_string(), "n".to_string()].into_iter().collect();
+        let known: HashSet<String> = ["created_at".to_string(), "n".to_string()]
+            .into_iter()
+            .collect();
         let err = dp.validate_fields(&known).unwrap_err();
         assert!(err.to_string().contains("unknown field 'nope'"), "{err}");
 
         // and at runtime a missing field errors rather than panics.
-        let err = dp.resolve(&Document::new(), &ParamValues::default()).unwrap_err();
+        let err = dp
+            .resolve(&Document::new(), &ParamValues::default())
+            .unwrap_err();
         assert!(err.to_string().contains("absent"), "{err}");
     }
 

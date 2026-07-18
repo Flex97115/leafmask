@@ -41,11 +41,16 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     for entry in fs::read_dir(dir).map_err(|e| Error::Storage(e.to_string()))? {
         let entry = entry.map_err(|e| Error::Storage(e.to_string()))?;
         let path = entry.path();
-        let ft = entry.file_type().map_err(|e| Error::Storage(e.to_string()))?;
+        let ft = entry
+            .file_type()
+            .map_err(|e| Error::Storage(e.to_string()))?;
         if ft.is_dir() {
             walk(base, &path, out)?;
         } else if let Ok(rel) = path.strip_prefix(base) {
-            out.push(rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"));
+            out.push(
+                rel.to_string_lossy()
+                    .replace(std::path::MAIN_SEPARATOR, "/"),
+            );
         }
     }
     Ok(())
@@ -115,7 +120,8 @@ impl Storage for DirectoryStorage {
     fn size(&self, prefix: &str) -> Result<u64> {
         let mut total = 0u64;
         for rel in self.list(prefix)? {
-            let meta = fs::metadata(self.resolve(&rel)).map_err(|e| Error::Storage(e.to_string()))?;
+            let meta =
+                fs::metadata(self.resolve(&rel)).map_err(|e| Error::Storage(e.to_string()))?;
             total += meta.len();
         }
         Ok(total)
@@ -149,7 +155,10 @@ mod tests {
 
         assert_eq!(s.get("d/metadata.json").unwrap(), b"meta");
         assert!(s.exists("d/data/a.bson").unwrap());
-        assert_eq!(s.list("d").unwrap(), vec!["d/data/a.bson", "d/metadata.json"]);
+        assert_eq!(
+            s.list("d").unwrap(),
+            vec!["d/data/a.bson", "d/metadata.json"]
+        );
         assert_eq!(s.size("d").unwrap(), 4 + 4);
 
         s.delete("d").unwrap();

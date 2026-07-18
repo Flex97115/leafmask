@@ -75,7 +75,8 @@ pub struct CustomTransformerDef {
 /// Register every custom transformer definition into `r`, alongside built-ins.
 pub fn register_custom(r: &mut Registry, defs: &[CustomTransformerDef]) -> Result<()> {
     for def in defs {
-        let params: Vec<ParamDefinition> = def.parameters.iter().map(|p| p.to_definition()).collect();
+        let params: Vec<ParamDefinition> =
+            def.parameters.iter().map(|p| p.to_definition()).collect();
         let description = def
             .description
             .clone()
@@ -87,30 +88,48 @@ pub fn register_custom(r: &mut Registry, defs: &[CustomTransformerDef]) -> Resul
                     .clone()
                     .filter(|c| !c.is_empty())
                     .ok_or_else(|| {
-                        Error::Transform(format!("custom transformer '{}' needs a command", def.name))
+                        Error::Transform(format!(
+                            "custom transformer '{}' needs a command",
+                            def.name
+                        ))
                     })?;
-                r.register(TransformerFactory::new(&def.name, &description, params, move |_, _| {
-                    Ok(Box::new(CommandTransformer::spawn(&argv)?) as Box<dyn Transformer>)
-                }));
+                r.register(TransformerFactory::new(
+                    &def.name,
+                    &description,
+                    params,
+                    move |_, _| {
+                        Ok(Box::new(CommandTransformer::spawn(&argv)?) as Box<dyn Transformer>)
+                    },
+                ));
             }
             "template" => {
                 let template = def.template.clone().ok_or_else(|| {
-                    Error::Transform(format!("custom transformer '{}' needs a template", def.name))
+                    Error::Transform(format!(
+                        "custom transformer '{}' needs a template",
+                        def.name
+                    ))
                 })?;
-                r.register(TransformerFactory::new(&def.name, &description, params, move |_, _| {
-                    let template = template.clone();
-                    let re = regex::Regex::new(r"\{\{\s*\.?(\w+)\s*\}\}").unwrap();
-                    Ok(Box::new(super::FnTransformer(move |_v: &Bson, doc: &bson::Document| {
-                        let out = re.replace_all(&template, |caps: &regex::Captures| {
-                            match doc.get(&caps[1]) {
-                                Some(Bson::String(s)) => s.clone(),
-                                Some(b) => b.to_string(),
-                                None => String::new(),
-                            }
-                        });
-                        Ok(Bson::String(out.into_owned()))
-                    })) as Box<dyn Transformer>)
-                }));
+                r.register(TransformerFactory::new(
+                    &def.name,
+                    &description,
+                    params,
+                    move |_, _| {
+                        let template = template.clone();
+                        let re = regex::Regex::new(r"\{\{\s*\.?(\w+)\s*\}\}").unwrap();
+                        Ok(Box::new(super::FnTransformer(
+                            move |_v: &Bson, doc: &bson::Document| {
+                                let out = re.replace_all(&template, |caps: &regex::Captures| {
+                                    match doc.get(&caps[1]) {
+                                        Some(Bson::String(s)) => s.clone(),
+                                        Some(b) => b.to_string(),
+                                        None => String::new(),
+                                    }
+                                });
+                                Ok(Bson::String(out.into_owned()))
+                            },
+                        )) as Box<dyn Transformer>)
+                    },
+                ));
             }
             other => {
                 return Err(Error::Transform(format!(
@@ -150,7 +169,11 @@ impl CommandTransformer {
         let stdout = BufReader::new(child.stdout.take().unwrap());
         Ok(CommandTransformer {
             argv: argv.to_vec(),
-            proc: Mutex::new(Proc { child, stdin, stdout }),
+            proc: Mutex::new(Proc {
+                child,
+                stdin,
+                stdout,
+            }),
         })
     }
 }
@@ -169,9 +192,14 @@ impl Transformer for CommandTransformer {
         let mut p = self.proc.lock().unwrap();
         let json = bson_to_json(value);
         let line = serde_json::to_string(&json).map_err(|e| Error::Transform(e.to_string()))?;
-        writeln!(p.stdin, "{line}").and_then(|_| p.stdin.flush()).map_err(|e| {
-            Error::Transform(format!("custom transformer '{}' write failed: {e}", self.argv[0]))
-        })?;
+        writeln!(p.stdin, "{line}")
+            .and_then(|_| p.stdin.flush())
+            .map_err(|e| {
+                Error::Transform(format!(
+                    "custom transformer '{}' write failed: {e}",
+                    self.argv[0]
+                ))
+            })?;
 
         let mut resp = String::new();
         let n = p
@@ -198,12 +226,16 @@ fn bson_to_json(b: &Bson) -> serde_json::Value {
         Bson::Boolean(v) => J::Bool(*v),
         Bson::Int32(v) => J::from(*v),
         Bson::Int64(v) => J::from(*v),
-        Bson::Double(v) => serde_json::Number::from_f64(*v).map(J::Number).unwrap_or(J::Null),
+        Bson::Double(v) => serde_json::Number::from_f64(*v)
+            .map(J::Number)
+            .unwrap_or(J::Null),
         Bson::String(s) => J::String(s.clone()),
         Bson::Array(a) => J::Array(a.iter().map(bson_to_json).collect()),
-        Bson::Document(d) => {
-            J::Object(d.iter().map(|(k, v)| (k.clone(), bson_to_json(v))).collect())
-        }
+        Bson::Document(d) => J::Object(
+            d.iter()
+                .map(|(k, v)| (k.clone(), bson_to_json(v)))
+                .collect(),
+        ),
         other => J::String(other.to_string()),
     }
 }
@@ -248,9 +280,19 @@ mod tests {
     fn command_driver_exchanges_over_stdio() {
         let mut r = Registry::with_builtins();
         // `cat` echoes each line back → identity transform, proving the round trip.
-        register_custom(&mut r, &defs("- name: echo\n  driver: command\n  command: [cat]\n")).unwrap();
+        register_custom(
+            &mut r,
+            &defs("- name: echo\n  driver: command\n  command: [cat]\n"),
+        )
+        .unwrap();
 
-        let t = r.instantiate("echo", &Default::default(), &crate::hash::HashEngine::new("s")).unwrap();
+        let t = r
+            .instantiate(
+                "echo",
+                &Default::default(),
+                &crate::hash::HashEngine::new("s"),
+            )
+            .unwrap();
         let doc = Document::new();
         assert_eq!(
             t.transform(&Bson::String("hello".into()), &doc).unwrap(),
@@ -273,8 +315,16 @@ mod tests {
             &defs("- name: dies\n  driver: command\n  command: [sh, -c, 'exit 1']\n"),
         )
         .unwrap();
-        let t = r.instantiate("dies", &Default::default(), &crate::hash::HashEngine::new("s")).unwrap();
-        let err = t.transform(&Bson::String("x".into()), &Document::new()).unwrap_err();
+        let t = r
+            .instantiate(
+                "dies",
+                &Default::default(),
+                &crate::hash::HashEngine::new("s"),
+            )
+            .unwrap();
+        let err = t
+            .transform(&Bson::String("x".into()), &Document::new())
+            .unwrap_err();
         assert!(
             err.to_string().contains("custom transformer"),
             "unclear error: {err}"
@@ -304,7 +354,9 @@ mod tests {
         // template driver renders from the document (locale supplied to satisfy
         // the declared required parameter).
         let raw: crate::config::Params = serde_yaml::from_str("locale: en\n").unwrap();
-        let t = r.instantiate("greet", &raw, &crate::hash::HashEngine::new("s")).unwrap();
+        let t = r
+            .instantiate("greet", &raw, &crate::hash::HashEngine::new("s"))
+            .unwrap();
         let mut d = Document::new();
         d.insert("name", "Sam");
         assert_eq!(

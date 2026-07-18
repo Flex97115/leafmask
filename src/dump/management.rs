@@ -86,8 +86,10 @@ pub fn select_for_deletion(
     // The N most recent completed dumps are protected from every rule.
     let protected: HashSet<String> = match policy.retain_recent {
         Some(n) => {
-            let mut done: Vec<&DumpMetadata> =
-                dumps.iter().filter(|m| m.status == DumpStatus::Done).collect();
+            let mut done: Vec<&DumpMetadata> = dumps
+                .iter()
+                .filter(|m| m.status == DumpStatus::Done)
+                .collect();
             done.sort_by(|a, b| created_at(b).cmp(&created_at(a)));
             done.into_iter().take(n).map(|m| m.id.clone()).collect()
         }
@@ -119,9 +121,7 @@ pub fn select_for_deletion(
         if policy.prune_failed && m.status == DumpStatus::Failed {
             candidate = true;
         }
-        if policy.prune_unsafe
-            && matches!(m.status, DumpStatus::Unknown | DumpStatus::InProgress)
-        {
+        if policy.prune_unsafe && matches!(m.status, DumpStatus::Unknown | DumpStatus::InProgress) {
             candidate = true;
         }
 
@@ -265,7 +265,10 @@ mod tests {
             ),
             ..Default::default()
         };
-        assert_eq!(prune(&s, &by_date, now, true).unwrap(), vec!["old".to_string()]);
+        assert_eq!(
+            prune(&s, &by_date, now, true).unwrap(),
+            vec!["old".to_string()]
+        );
         // dry-run kept everything.
         assert_eq!(list_entries(&s).unwrap().len(), 3);
 

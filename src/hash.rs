@@ -88,7 +88,10 @@ mod tests {
     fn deterministic_across_instances() {
         let a = HashEngine::new("pepper");
         let b = HashEngine::new("pepper");
-        assert_eq!(a.digest(b"alice@example.com"), b.digest(b"alice@example.com"));
+        assert_eq!(
+            a.digest(b"alice@example.com"),
+            b.digest(b"alice@example.com")
+        );
         assert_eq!(a.hash_bytes(b"x", 40), b.hash_bytes(b"x", 40));
         assert_eq!(a.hash_i64(b"x"), b.hash_i64(b"x"));
         assert_eq!(a.ranged_i64(b"x", 1, 100), b.ranged_i64(b"x", 1, 100));

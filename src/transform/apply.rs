@@ -104,7 +104,11 @@ impl TransformationPlan {
             let query = match &c.query {
                 Some(v) => match cast::yaml_to_bson(v) {
                     Bson::Document(d) => Some(d),
-                    _ => return Err(Error::Transform("collection query must be a document".into())),
+                    _ => {
+                        return Err(Error::Transform(
+                            "collection query must be a document".into(),
+                        ))
+                    }
                 },
                 None => None,
             };
@@ -118,17 +122,18 @@ impl TransformationPlan {
                     Some(w) => Some(Condition::parse(w)?),
                     None => None,
                 };
-                let type_override = match &r.type_override {
-                    Some(t) => Some(
-                        ParamType::from_name(t)
-                            .ok_or_else(|| Error::Transform(format!("unknown type override '{t}'")))?,
-                    ),
-                    None => None,
-                };
+                let type_override =
+                    match &r.type_override {
+                        Some(t) => Some(ParamType::from_name(t).ok_or_else(|| {
+                            Error::Transform(format!("unknown type override '{t}'"))
+                        })?),
+                        None => None,
+                    };
                 let exec = if r.dynamic_params.is_empty() {
                     RuleExec::Static(registry.build(&r.name, &base, engine)?)
                 } else {
-                    let dynamic = DynamicParams::from_config(&r.dynamic_params, &factory.parameters)?;
+                    let dynamic =
+                        DynamicParams::from_config(&r.dynamic_params, &factory.parameters)?;
                     RuleExec::Dynamic {
                         name: r.name.clone(),
                         base,
@@ -142,10 +147,7 @@ impl TransformationPlan {
                     exec,
                 });
             }
-            collections.insert(
-                c.collection.clone(),
-                CollectionPlan { when, query, rules },
-            );
+            collections.insert(c.collection.clone(), CollectionPlan { when, query, rules });
         }
         Ok(TransformationPlan { collections })
     }
@@ -161,7 +163,11 @@ impl TransformationPlan {
     /// Whether `doc` from `collection` should be dumped, honouring any custom
     /// query filter. Collections without a filter include everything.
     pub fn should_include(&self, collection: &str, doc: &Document) -> bool {
-        match self.collections.get(collection).and_then(|c| c.query.as_ref()) {
+        match self
+            .collections
+            .get(collection)
+            .and_then(|c| c.query.as_ref())
+        {
             Some(query) => matches_query(doc, query),
             None => true,
         }
@@ -199,7 +205,11 @@ impl TransformationPlan {
             };
             let result = match &rule.exec {
                 RuleExec::Static(t) => t.transform(&input, doc)?,
-                RuleExec::Dynamic { name, base, dynamic } => {
+                RuleExec::Dynamic {
+                    name,
+                    base,
+                    dynamic,
+                } => {
                     let merged = dynamic.resolve(doc, base)?;
                     let t = registry.build(name, &merged, engine)?;
                     t.transform(&input, doc)?
@@ -269,11 +279,15 @@ mod tests {
     // Acceptance: configured transformers run on matching fields.
     #[test]
     fn transforms_configured_fields() {
-        let (p, r, e) = plan(
-            "- collection: users\n  transformers:\n    - field: email\n      name: masking\n",
-        );
+        let (p, r, e) =
+            plan("- collection: users\n  transformers:\n    - field: email\n      name: masking\n");
         let out = p
-            .transform(&r, &e, "users", &doc(&[("email", Bson::String("bob@x.com".into()))]))
+            .transform(
+                &r,
+                &e,
+                "users",
+                &doc(&[("email", Bson::String("bob@x.com".into()))]),
+            )
             .unwrap();
         assert_eq!(out.get_str("email").unwrap(), "*********");
     }
@@ -281,7 +295,8 @@ mod tests {
     // Acceptance: collections without an entry are unmodified.
     #[test]
     fn untouched_collections_pass_through() {
-        let (p, r, e) = plan("- collection: users\n  transformers:\n    - field: email\n      name: masking\n");
+        let (p, r, e) =
+            plan("- collection: users\n  transformers:\n    - field: email\n      name: masking\n");
         let original = doc(&[("total", Bson::Int64(100))]);
         assert_eq!(p.transform(&r, &e, "orders", &original).unwrap(), original);
     }
@@ -305,7 +320,9 @@ mod tests {
         let (p, r, e) = plan(
             "- collection: users\n  transformers:\n    - field: pin\n      name: masking\n      type_override: string\n",
         );
-        let out = p.transform(&r, &e, "users", &doc(&[("pin", Bson::Int64(12345))])).unwrap();
+        let out = p
+            .transform(&r, &e, "users", &doc(&[("pin", Bson::Int64(12345))]))
+            .unwrap();
         assert_eq!(out.get_str("pin").unwrap(), "*****");
     }
 
@@ -317,11 +334,22 @@ mod tests {
         );
         // opted_out true -> transformed to null.
         let out = p
-            .transform(&r, &e, "users", &doc(&[("email", Bson::String("a@b.c".into())), ("opted_out", Bson::Boolean(true))]))
+            .transform(
+                &r,
+                &e,
+                "users",
+                &doc(&[
+                    ("email", Bson::String("a@b.c".into())),
+                    ("opted_out", Bson::Boolean(true)),
+                ]),
+            )
             .unwrap();
         assert_eq!(out.get("email"), Some(&Bson::Null));
         // opted_out false -> passes through unmodified.
-        let keep = doc(&[("email", Bson::String("a@b.c".into())), ("opted_out", Bson::Boolean(false))]);
+        let keep = doc(&[
+            ("email", Bson::String("a@b.c".into())),
+            ("opted_out", Bson::Boolean(false)),
+        ]);
         assert_eq!(p.transform(&r, &e, "users", &keep).unwrap(), keep);
     }
 
@@ -332,7 +360,14 @@ mod tests {
             "- collection: events\n  transformers:\n    - field: ends_at\n      name: random_int\n      params:\n        min: 0\n        max: 1\n      dynamic_params:\n        max:\n          field: cap\n",
         );
         // cap drives the upper bound; with min=0,max=cap=0 the only value is 0.
-        let out = p.transform(&r, &e, "events", &doc(&[("ends_at", Bson::Int64(999)), ("cap", Bson::Int64(0))])).unwrap();
+        let out = p
+            .transform(
+                &r,
+                &e,
+                "events",
+                &doc(&[("ends_at", Bson::Int64(999)), ("cap", Bson::Int64(0))]),
+            )
+            .unwrap();
         assert_eq!(out.get("ends_at"), Some(&Bson::Int64(0)));
     }
 }

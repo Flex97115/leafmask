@@ -268,7 +268,11 @@ mod driver {
                     .await
                     .map_err(|e| Error::Mongo(format!("find: {e}")))?;
                 let mut documents = Vec::new();
-                while cursor.advance().await.map_err(|e| Error::Mongo(e.to_string()))? {
+                while cursor
+                    .advance()
+                    .await
+                    .map_err(|e| Error::Mongo(e.to_string()))?
+                {
                     documents.push(
                         cursor
                             .deserialize_current()
@@ -279,14 +283,25 @@ mod driver {
                 // Indexes.
                 let mut indexes = Vec::new();
                 if let Ok(mut idx_cursor) = coll.list_indexes().await {
-                    while idx_cursor.advance().await.map_err(|e| Error::Mongo(e.to_string()))? {
+                    while idx_cursor
+                        .advance()
+                        .await
+                        .map_err(|e| Error::Mongo(e.to_string()))?
+                    {
                         let model = idx_cursor
                             .deserialize_current()
                             .map_err(|e| Error::Mongo(e.to_string()))?;
                         let keys: Vec<(String, i32)> = model
                             .keys
                             .iter()
-                            .map(|(k, v)| (k.clone(), v.as_i32().or_else(|| v.as_i64().map(|n| n as i32)).unwrap_or(1)))
+                            .map(|(k, v)| {
+                                (
+                                    k.clone(),
+                                    v.as_i32()
+                                        .or_else(|| v.as_i64().map(|n| n as i32))
+                                        .unwrap_or(1),
+                                )
+                            })
                             .collect();
                         let name = model
                             .options
@@ -423,9 +438,7 @@ mod driver {
     fn map_insert_error(e: &mongodb::error::Error) -> InsertError {
         use mongodb::error::{ErrorKind, WriteFailure};
         let (code, message) = match e.kind.as_ref() {
-            ErrorKind::Write(WriteFailure::WriteError(we)) => {
-                (Some(we.code), we.message.clone())
-            }
+            ErrorKind::Write(WriteFailure::WriteError(we)) => (Some(we.code), we.message.clone()),
             other => (None, other.to_string()),
         };
         // Extract the offending index name from an E11000 message when present.

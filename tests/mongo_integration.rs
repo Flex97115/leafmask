@@ -29,7 +29,10 @@ fn uri() -> String {
 /// A unique database name per test, so parallel tests do not collide.
 fn db_name(tag: &str) -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     format!("leafmask_it_{tag}_{}_{}", std::process::id(), nanos)
 }
 
@@ -47,9 +50,14 @@ fn user(id: i64, email: &str) -> Document {
 fn sink_and_source_round_trip_through_real_mongo() {
     let m = connect();
     let db = db_name("rt");
-    let idx = IndexSpec { name: "email_idx".into(), keys: vec![("email".into(), 1)], unique: true };
+    let idx = IndexSpec {
+        name: "email_idx".into(),
+        keys: vec![("email".into(), 1)],
+        unique: true,
+    };
 
-    m.ensure_collection(&db, "users", &None, &BTreeMap::new()).unwrap();
+    m.ensure_collection(&db, "users", &None, &BTreeMap::new())
+        .unwrap();
     m.insert(&db, "users", &user(1, "a@x.com")).unwrap();
     m.insert(&db, "users", &user(2, "b@x.com")).unwrap();
     m.create_index(&db, "users", &idx).unwrap();
@@ -61,7 +69,10 @@ fn sink_and_source_round_trip_through_real_mongo() {
     // read back documents + the index we created.
     let data = m.read_collection(&db, "users").unwrap();
     assert_eq!(data.documents.len(), 2);
-    assert!(data.indexes.iter().any(|i| i.name == "email_idx" && i.unique));
+    assert!(data
+        .indexes
+        .iter()
+        .any(|i| i.name == "email_idx" && i.unique));
 
     m.drop_database(&db).unwrap();
 }
@@ -85,14 +96,20 @@ fn duplicate_key_insert_reports_error() {
 fn dump_then_restore_round_trip() {
     let m = connect();
     let db = db_name("e2e");
-    m.ensure_collection(&db, "users", &None, &BTreeMap::new()).unwrap();
+    m.ensure_collection(&db, "users", &None, &BTreeMap::new())
+        .unwrap();
     for i in 1..=3 {
-        m.insert(&db, "users", &user(i, &format!("u{i}@x.com"))).unwrap();
+        m.insert(&db, "users", &user(i, &format!("u{i}@x.com")))
+            .unwrap();
     }
     m.create_index(
         &db,
         "users",
-        &IndexSpec { name: "email_idx".into(), keys: vec![("email".into(), 1)], unique: true },
+        &IndexSpec {
+            name: "email_idx".into(),
+            keys: vec![("email".into(), 1)],
+            unique: true,
+        },
     )
     .unwrap();
 
@@ -120,16 +137,27 @@ fn dump_then_restore_round_trip() {
 
     // Wipe the live db, then restore it from storage.
     m.drop_database(&db).unwrap();
-    assert!(m.read_collection(&db, "users").map(|c| c.documents.len()).unwrap_or(0) == 0);
+    assert!(
+        m.read_collection(&db, "users")
+            .map(|c| c.documents.len())
+            .unwrap_or(0)
+            == 0
+    );
 
     let report = Restore {
         storage: &storage,
         sink: &m,
         exclusions: ErrorExclusions::default(),
         scripts: Default::default(),
-        options: RestoreOptions { batch_size: 10, ..Default::default() },
+        options: RestoreOptions {
+            batch_size: 10,
+            ..Default::default()
+        },
     }
-    .run(&meta.id, &leafmask::restore::ProcessScriptRunner::new(uri()))
+    .run(
+        &meta.id,
+        &leafmask::restore::ProcessScriptRunner::new(uri()),
+    )
     .unwrap();
     // pre/post script stages are empty here, so ProcessScriptRunner is never invoked.
     assert_eq!(report.inserted, 3);
@@ -175,7 +203,10 @@ fn transformation_applied_on_real_dump() {
 
     let full = read_collection_full(&storage, &meta.id, &db, "users").unwrap();
     let email = full.documents[0].get_str("email").unwrap();
-    assert!(email.chars().all(|c| c == '*') && !email.is_empty(), "email not masked: {email}");
+    assert!(
+        email.chars().all(|c| c == '*') && !email.is_empty(),
+        "email not masked: {email}"
+    );
     let _ = Bson::Null;
 
     m.drop_database(&db).unwrap();

@@ -215,8 +215,21 @@ mod tests {
     #[test]
     fn shows_before_after_up_to_rows_limit() {
         let (plan, r, e) = setup();
-        let opts = PreviewOptions { rows_limit: 2, ..Default::default() };
-        let out = preview(&plan, &r, &e, "users", &docs(), &Warnings::new(), &[], &opts).unwrap();
+        let opts = PreviewOptions {
+            rows_limit: 2,
+            ..Default::default()
+        };
+        let out = preview(
+            &plan,
+            &r,
+            &e,
+            "users",
+            &docs(),
+            &Warnings::new(),
+            &[],
+            &opts,
+        )
+        .unwrap();
         // only 2 of 3 documents.
         assert!(out.contains("document #0"));
         assert!(out.contains("document #1"));
@@ -241,7 +254,10 @@ mod tests {
             &d,
             &Warnings::new(),
             &[],
-            &PreviewOptions { format: Format::Json, ..Default::default() },
+            &PreviewOptions {
+                format: Format::Json,
+                ..Default::default()
+            },
         )
         .unwrap();
         // valid JSON.
@@ -256,7 +272,10 @@ mod tests {
             &d,
             &Warnings::new(),
             &[],
-            &PreviewOptions { table_format: TableFormat::Horizontal, ..Default::default() },
+            &PreviewOptions {
+                table_format: TableFormat::Horizontal,
+                ..Default::default()
+            },
         )
         .unwrap();
         assert!(horizontal.contains("before:"));
@@ -267,8 +286,21 @@ mod tests {
     #[test]
     fn transformed_only_restricts_fields() {
         let (plan, r, e) = setup();
-        let opts = PreviewOptions { transformed_only: true, ..Default::default() };
-        let out = preview(&plan, &r, &e, "users", &docs(), &Warnings::new(), &[], &opts).unwrap();
+        let opts = PreviewOptions {
+            transformed_only: true,
+            ..Default::default()
+        };
+        let out = preview(
+            &plan,
+            &r,
+            &e,
+            "users",
+            &docs(),
+            &Warnings::new(),
+            &[],
+            &opts,
+        )
+        .unwrap();
         assert!(out.contains("email:"));
         // age has no transformer -> excluded from transformed-only view.
         assert!(!out.contains("age:"));
@@ -280,7 +312,10 @@ mod tests {
         assert!(parse_format("yaml").is_err());
         assert!(parse_table_format("diagonal").is_err());
         assert_eq!(parse_format("json").unwrap(), Format::Json);
-        assert_eq!(parse_table_format("vertical").unwrap(), TableFormat::Vertical);
+        assert_eq!(
+            parse_table_format("vertical").unwrap(),
+            TableFormat::Vertical
+        );
     }
 
     // Acceptance: --strict makes an unresolved warning fail the command.
@@ -289,7 +324,10 @@ mod tests {
         let (plan, r, e) = setup();
         let mut warnings = Warnings::new();
         warnings.push(Warning::new(Severity::Warning, "risky"));
-        let opts = PreviewOptions { strict: true, ..Default::default() };
+        let opts = PreviewOptions {
+            strict: true,
+            ..Default::default()
+        };
         let err = preview(&plan, &r, &e, "users", &docs(), &warnings, &[], &opts).unwrap_err();
         assert!(err.to_string().contains("strict"), "{err}");
 

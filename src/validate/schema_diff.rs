@@ -62,8 +62,12 @@ impl SchemaDiff {
     /// A human-readable line for reporting to the operator.
     pub fn describe(&self, collection: &str) -> String {
         match self {
-            SchemaDiff::IndexAdded(n) => format!("{collection}: index '{n}' added live, not recorded"),
-            SchemaDiff::IndexRemoved(n) => format!("{collection}: recorded index '{n}' is missing live"),
+            SchemaDiff::IndexAdded(n) => {
+                format!("{collection}: index '{n}' added live, not recorded")
+            }
+            SchemaDiff::IndexRemoved(n) => {
+                format!("{collection}: recorded index '{n}' is missing live")
+            }
             SchemaDiff::IndexChanged(n) => format!("{collection}: index '{n}' definition changed"),
             SchemaDiff::ValidatorChanged => format!("{collection}: validator changed"),
             SchemaDiff::OptionChanged(k) => format!("{collection}: option '{k}' changed"),
@@ -108,10 +112,7 @@ pub fn diff_collection(recorded: &CollectionSchema, live: &CollectionSchema) -> 
 
 /// Diff a whole database's worth of recorded vs live schemas, returning the
 /// drift lines. An empty result means no drift.
-pub fn diff_database(
-    recorded: &[CollectionSchema],
-    live: &[CollectionSchema],
-) -> Vec<String> {
+pub fn diff_database(recorded: &[CollectionSchema], live: &[CollectionSchema]) -> Vec<String> {
     let mut report = Vec::new();
     for r in recorded {
         let empty = CollectionSchema::new(&r.collection);
@@ -178,7 +179,9 @@ mod tests {
     #[test]
     fn reports_option_drift() {
         let mut recorded = CollectionSchema::new("logs");
-        recorded.options.insert("capped".into(), Bson::Boolean(false));
+        recorded
+            .options
+            .insert("capped".into(), Bson::Boolean(false));
         let mut live = CollectionSchema::new("logs");
         live.options.insert("capped".into(), Bson::Boolean(true));
         assert_eq!(

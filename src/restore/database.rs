@@ -80,8 +80,12 @@ impl<'a> Restore<'a> {
                     continue;
                 }
                 let data = read_collection_full(self.storage, &meta.id, &db.name, &coll.name)?;
-                self.sink
-                    .ensure_collection(&db.name, &coll.name, &data.validator, &data.options)?;
+                self.sink.ensure_collection(
+                    &db.name,
+                    &coll.name,
+                    &data.validator,
+                    &data.options,
+                )?;
 
                 self.insert_documents(&db.name, &coll.name, &data.documents, &mut report)?;
 
@@ -165,7 +169,9 @@ impl<'a> Restore<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dump::{write_collection_data, write_metadata, CollectionToc, DatabaseToc, DumpMetadata, DumpStatus};
+    use crate::dump::{
+        write_collection_data, write_metadata, CollectionToc, DatabaseToc, DumpMetadata, DumpStatus,
+    };
     use crate::mongo::{CollectionData, InMemoryMongo, MongoSource};
     use crate::restore::scripts::ScriptRunner;
     use crate::storage::DirectoryStorage;
@@ -192,7 +198,11 @@ mod tests {
     }
 
     /// Build a dump in directory storage and return (tempdir, storage).
-    fn seed_dump(id: &str, docs: &[Document], indexes: Vec<IndexSpec>) -> (tempfile::TempDir, DirectoryStorage) {
+    fn seed_dump(
+        id: &str,
+        docs: &[Document],
+        indexes: Vec<IndexSpec>,
+    ) -> (tempfile::TempDir, DirectoryStorage) {
         let dir = tempfile::tempdir().unwrap();
         let s = DirectoryStorage::new(dir.path()).unwrap();
         let data = CollectionData {
@@ -237,7 +247,10 @@ mod tests {
             sink: &sink,
             exclusions: Default::default(),
             scripts: Default::default(),
-            options: RestoreOptions { batch_size: 10, ..Default::default() },
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
         };
         let report = r.run("latest", &NoScripts).unwrap();
         assert_eq!(report.inserted, 2);
@@ -254,7 +267,10 @@ mod tests {
             sink: &sink,
             exclusions: Default::default(),
             scripts: Default::default(),
-            options: RestoreOptions { batch_size: 1, ..Default::default() },
+            options: RestoreOptions {
+                batch_size: 1,
+                ..Default::default()
+            },
         };
         let err = r.run("nonexistent", &NoScripts).unwrap_err();
         assert!(matches!(err, Error::NotFound(_)), "{err}");
@@ -264,8 +280,16 @@ mod tests {
     // here); dependency order creates indexes after documents.
     #[test]
     fn filters_and_dependency_order() {
-        let idx = |n: &str| IndexSpec { name: n.into(), keys: vec![(n.into(), 1)], unique: false };
-        let (_d, s) = seed_dump("20260701", &[doc(1)], vec![idx("keep_idx"), idx("drop_idx")]);
+        let idx = |n: &str| IndexSpec {
+            name: n.into(),
+            keys: vec![(n.into(), 1)],
+            unique: false,
+        };
+        let (_d, s) = seed_dump(
+            "20260701",
+            &[doc(1)],
+            vec![idx("keep_idx"), idx("drop_idx")],
+        );
         let sink = InMemoryMongo::new();
         let r = Restore {
             storage: &s,
@@ -295,16 +319,18 @@ mod tests {
     #[test]
     fn error_exclusions_skip_or_abort() {
         let (_d, s) = seed_dump("20260701", &[doc(1), doc(1)], vec![]); // duplicate _id
-        // With 11000 excluded, the duplicate is skipped.
+                                                                        // With 11000 excluded, the duplicate is skipped.
         let sink = InMemoryMongo::new();
-        let excl: ErrorExclusions =
-            serde_yaml::from_str("global_error_codes: [11000]\n").unwrap();
+        let excl: ErrorExclusions = serde_yaml::from_str("global_error_codes: [11000]\n").unwrap();
         let r = Restore {
             storage: &s,
             sink: &sink,
             exclusions: excl,
             scripts: Default::default(),
-            options: RestoreOptions { batch_size: 10, ..Default::default() },
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
         };
         let report = r.run("20260701", &NoScripts).unwrap();
         assert_eq!(report.inserted, 1);
@@ -317,7 +343,10 @@ mod tests {
             sink: &sink2,
             exclusions: Default::default(),
             scripts: Default::default(),
-            options: RestoreOptions { batch_size: 10, ..Default::default() },
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
         };
         assert!(r2.run("20260701", &NoScripts).is_err());
     }

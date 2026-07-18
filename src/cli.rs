@@ -158,7 +158,9 @@ fn maybe_config(cli: &Cli) -> crate::Result<Option<crate::config::Config>> {
 /// Load config and open the configured storage backend (required for any
 /// command that reads or writes dumps).
 fn open_storage(cli: &Cli) -> crate::Result<std::sync::Arc<dyn crate::storage::Storage>> {
-    Ok(crate::storage::open_from_config(&require_config(cli)?.storage)?)
+    Ok(crate::storage::open_from_config(
+        &require_config(cli)?.storage,
+    )?)
 }
 
 /// Load the config, erroring clearly if none was provided.
@@ -218,7 +220,10 @@ pub fn run(cli: Cli) -> crate::Result<()> {
         }
         Command::ShowDump { id } => {
             let storage = open_storage(&cli)?;
-            print!("{}", crate::dump::management::show_dump(storage.as_ref(), id)?);
+            print!(
+                "{}",
+                crate::dump::management::show_dump(storage.as_ref(), id)?
+            );
             Ok(())
         }
         Command::Delete {
@@ -299,7 +304,13 @@ fn cmd_validate(_cli: &Cli, _args: &ValidateArgs) -> crate::Result<()> {
 
 #[cfg(feature = "mongo")]
 fn engine_from(config: &crate::config::Config) -> crate::hash::HashEngine {
-    crate::hash::HashEngine::new(config.common.salt.clone().unwrap_or_else(|| "leafmask".into()))
+    crate::hash::HashEngine::new(
+        config
+            .common
+            .salt
+            .clone()
+            .unwrap_or_else(|| "leafmask".into()),
+    )
 }
 
 #[cfg(feature = "mongo")]
@@ -331,7 +342,11 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
         source: &driver,
         registry: &registry,
         engine: &engine,
-        plan: if configs.is_empty() { None } else { Some(&plan) },
+        plan: if configs.is_empty() {
+            None
+        } else {
+            Some(&plan)
+        },
         options,
     };
     let meta = dump.run(chrono::Utc::now())?;
@@ -409,7 +424,9 @@ fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
     let configs = transformation_configs(&config)?;
     let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
 
-    let docs = driver.read_collection(&args.database, &args.collection)?.documents;
+    let docs = driver
+        .read_collection(&args.database, &args.collection)?
+        .documents;
     let opts = PreviewOptions {
         rows_limit: args.rows_limit,
         format,

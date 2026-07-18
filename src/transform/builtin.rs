@@ -75,7 +75,11 @@ pub fn register_all(r: &mut Registry) {
             let max = p.get_i64("max").unwrap();
             let engine = engine.clone();
             Ok(boxed(move |v, _| {
-                Ok(Bson::Int64(engine.ranged_i64(&cast::to_hashable_bytes(v), min, max)))
+                Ok(Bson::Int64(engine.ranged_i64(
+                    &cast::to_hashable_bytes(v),
+                    min,
+                    max,
+                )))
             }))
         },
     ));
@@ -157,8 +161,7 @@ pub fn register_all(r: &mut Registry) {
             let engine = engine.clone();
             Ok(boxed(move |v, _| match v {
                 Bson::DateTime(dt) => {
-                    let shift =
-                        engine.ranged_i64(&cast::to_hashable_bytes(v), -max_days, max_days);
+                    let shift = engine.ranged_i64(&cast::to_hashable_bytes(v), -max_days, max_days);
                     let ms = dt.timestamp_millis() + shift * 86_400_000;
                     Ok(Bson::DateTime(DateTime::from_millis(ms)))
                 }
@@ -178,7 +181,12 @@ pub fn register_all(r: &mut Registry) {
             "mask character",
         )],
         |p, _| {
-            let ch = p.get_str("char").unwrap_or("*").chars().next().unwrap_or('*');
+            let ch = p
+                .get_str("char")
+                .unwrap_or("*")
+                .chars()
+                .next()
+                .unwrap_or('*');
             Ok(boxed(move |v, _| {
                 let s = v.as_str().unwrap_or("");
                 Ok(Bson::String(ch.to_string().repeat(s.chars().count())))
@@ -199,7 +207,9 @@ pub fn register_all(r: &mut Registry) {
             let replace = p.get_str("replace").unwrap().to_string();
             Ok(boxed(move |v, _| {
                 let s = v.as_str().unwrap_or("");
-                Ok(Bson::String(re.replace_all(s, replace.as_str()).into_owned()))
+                Ok(Bson::String(
+                    re.replace_all(s, replace.as_str()).into_owned(),
+                ))
             }))
         },
     ));
@@ -207,7 +217,11 @@ pub fn register_all(r: &mut Registry) {
     r.register(TransformerFactory::new(
         "replace",
         "Replace the value with a fixed configured value.",
-        vec![ParamDefinition::required("value", ParamType::Any, "replacement value")],
+        vec![ParamDefinition::required(
+            "value",
+            ParamType::Any,
+            "replacement value",
+        )],
         |p, _| {
             let value = p.get("value").cloned().unwrap_or(Bson::Null);
             Ok(boxed(move |_, _| Ok(value.clone())))
@@ -316,7 +330,11 @@ pub fn register_all(r: &mut Registry) {
     r.register(TransformerFactory::new(
         "template",
         "Render a template with {{ field }} placeholders substituted from the document.",
-        vec![ParamDefinition::required("template", ParamType::String, "template text")],
+        vec![ParamDefinition::required(
+            "template",
+            ParamType::String,
+            "template text",
+        )],
         |p, _| {
             let template = p.get_str("template").unwrap().to_string();
             let re = Regex::new(r"\{\{\s*\.?(\w+)\s*\}\}").unwrap();
@@ -353,7 +371,13 @@ mod tests {
     fn builtins_are_registered_and_documented() {
         let r = Registry::with_builtins();
         let names = r.names();
-        for expected in ["hash", "random_int", "noise_date", "masking", "random_person"] {
+        for expected in [
+            "hash",
+            "random_int",
+            "noise_date",
+            "masking",
+            "random_person",
+        ] {
             assert!(names.contains(&expected), "missing {expected}");
         }
         let doc = r.get("random_int").unwrap().doc();
@@ -394,14 +418,18 @@ mod tests {
         let r = Registry::with_builtins();
         let doc = Document::new();
 
-        let t = r.instantiate("noise_int", &params("ratio: 0.1\n"), &engine()).unwrap();
+        let t = r
+            .instantiate("noise_int", &params("ratio: 0.1\n"), &engine())
+            .unwrap();
         let out = t.transform(&Bson::Int64(1000), &doc).unwrap();
         match out {
             Bson::Int64(v) => assert!((900..=1100).contains(&v), "out of noise range: {v}"),
             other => panic!("expected int, got {other:?}"),
         }
 
-        let t = r.instantiate("noise_date", &params("max_days: 5\n"), &engine()).unwrap();
+        let t = r
+            .instantiate("noise_date", &params("max_days: 5\n"), &engine())
+            .unwrap();
         let base = DateTime::from_millis(1_600_000_000_000);
         let out = t.transform(&Bson::DateTime(base), &doc).unwrap();
         match out {
@@ -418,20 +446,29 @@ mod tests {
     #[test]
     fn structured_person_is_consistent() {
         let r = Registry::with_builtins();
-        let t = r.instantiate("random_person", &params(""), &engine()).unwrap();
-        let out = t.transform(&Bson::String("seed".into()), &Document::new()).unwrap();
+        let t = r
+            .instantiate("random_person", &params(""), &engine())
+            .unwrap();
+        let out = t
+            .transform(&Bson::String("seed".into()), &Document::new())
+            .unwrap();
         let d = out.as_document().unwrap();
         let first = d.get_str("first_name").unwrap().to_lowercase();
         let last = d.get_str("last_name").unwrap().to_lowercase();
         // email is derived from the same first/last -> internally consistent.
-        assert_eq!(d.get_str("email").unwrap(), format!("{first}.{last}@example.com"));
+        assert_eq!(
+            d.get_str("email").unwrap(),
+            format!("{first}.{last}@example.com")
+        );
     }
 
     // Acceptance: an ObjectId field is transformed and stays a valid ObjectId.
     #[test]
     fn object_id_stays_valid() {
         let r = Registry::with_builtins();
-        let t = r.instantiate("random_object_id", &params(""), &engine()).unwrap();
+        let t = r
+            .instantiate("random_object_id", &params(""), &engine())
+            .unwrap();
         let src = ObjectId::parse_str("5f9d7a3b2c1e4a6b8d0f1234").unwrap();
         let out = t.transform(&Bson::ObjectId(src), &Document::new()).unwrap();
         match out {
@@ -450,11 +487,16 @@ mod tests {
         };
         let mask = r.instantiate("masking", &params(""), &engine()).unwrap();
         assert_eq!(
-            mask.transform(&Bson::String("secret".into()), &doc).unwrap(),
+            mask.transform(&Bson::String("secret".into()), &doc)
+                .unwrap(),
             Bson::String("******".into())
         );
         let tmpl = r
-            .instantiate("template", &params("template: 'lives in {{ city }}'\n"), &engine())
+            .instantiate(
+                "template",
+                &params("template: 'lives in {{ city }}'\n"),
+                &engine(),
+            )
             .unwrap();
         assert_eq!(
             tmpl.transform(&Bson::Null, &doc).unwrap(),

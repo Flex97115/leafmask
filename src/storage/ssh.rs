@@ -88,7 +88,8 @@ mod imp {
                 .map_err(|e| Error::Storage(format!("ssh connect: {e}")))?;
             let mut sess = Session::new().map_err(|e| Error::Storage(e.to_string()))?;
             sess.set_tcp_stream(tcp);
-            sess.handshake().map_err(|e| Error::Storage(e.to_string()))?;
+            sess.handshake()
+                .map_err(|e| Error::Storage(e.to_string()))?;
             let user = self.cfg.username.as_deref().unwrap_or("root");
             if let Some(key) = &self.cfg.private_key {
                 sess.userauth_pubkey_file(user, None, Path::new(key), None)
@@ -129,7 +130,8 @@ mod imp {
                     .open(Path::new(&remote))
                     .map_err(|_| Error::NotFound(format!("blob '{path}' not found")))?;
                 let mut buf = Vec::new();
-                file.read_to_end(&mut buf).map_err(|e| Error::Storage(e.to_string()))?;
+                file.read_to_end(&mut buf)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
                 Ok(buf)
             })
         }
@@ -149,7 +151,8 @@ mod imp {
                 let mut file = sftp
                     .create(Path::new(&remote))
                     .map_err(|e| Error::Storage(e.to_string()))?;
-                file.write_all(data).map_err(|e| Error::Storage(e.to_string()))?;
+                file.write_all(data)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
                 Ok(())
             })
         }
@@ -227,7 +230,10 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.host, "backup.example.com");
         assert_eq!(cfg.port, 2222);
-        assert_eq!(cfg.remote_path("dump-1/metadata.json"), "/srv/dumps/dump-1/metadata.json");
+        assert_eq!(
+            cfg.remote_path("dump-1/metadata.json"),
+            "/srv/dumps/dump-1/metadata.json"
+        );
 
         // default port 22, default base_path ".".
         let cfg = SshConfig::from_params(&params("host: h\n")).unwrap();

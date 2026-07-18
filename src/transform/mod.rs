@@ -47,8 +47,7 @@ pub struct TransformerDoc {
     pub parameters: Vec<ParamDefinition>,
 }
 
-type BuildFn =
-    Box<dyn Fn(&ParamValues, &HashEngine) -> Result<Box<dyn Transformer>> + Send + Sync>;
+type BuildFn = Box<dyn Fn(&ParamValues, &HashEngine) -> Result<Box<dyn Transformer>> + Send + Sync>;
 
 /// A factory that declares a transformer's parameters and builds instances.
 pub struct TransformerFactory {
@@ -63,7 +62,10 @@ impl TransformerFactory {
         name: &str,
         description: &str,
         parameters: Vec<ParamDefinition>,
-        build: impl Fn(&ParamValues, &HashEngine) -> Result<Box<dyn Transformer>> + Send + Sync + 'static,
+        build: impl Fn(&ParamValues, &HashEngine) -> Result<Box<dyn Transformer>>
+            + Send
+            + Sync
+            + 'static,
     ) -> Self {
         TransformerFactory {
             name: name.to_string(),
@@ -115,7 +117,10 @@ impl Registry {
 
     /// Catalog docs for every registered transformer, sorted by name.
     pub fn docs(&self) -> Vec<TransformerDoc> {
-        self.factories.values().map(TransformerFactory::doc).collect()
+        self.factories
+            .values()
+            .map(TransformerFactory::doc)
+            .collect()
     }
 
     /// Build a transformer directly from already-resolved parameter values
