@@ -621,19 +621,18 @@ fn cmd_bench(cli: &Cli, args: &BenchArgs) -> crate::Result<()> {
         parse_sizes(&args.estimate)?
     };
     // The bench does not need a config file: --uri (or LEAFMASK_MONGO_URI)
-    // alone is enough; mongodb.uri from a config is used when present.
-    let uri = cli
-        .uri
-        .clone()
-        .or_else(|| {
-            maybe_config(cli)
-                .ok()
-                .flatten()
-                .and_then(|c| c.mongodb.uri.clone())
-        })
-        .ok_or_else(|| {
-            crate::Error::Config("MongoDB URI required: pass --uri or set mongodb.uri".into())
-        })?;
+    // alone is enough; mongodb.uri from a config is used when present. A
+    // config that fails to load/parse is a real error and must propagate
+    // (not be swallowed as "no config"); only `maybe_config`'s own "none
+    // located" case is treated as absent.
+    let uri = match cli.uri.clone() {
+        Some(uri) => uri,
+        None => maybe_config(cli)?
+            .and_then(|c| c.mongodb.uri.clone())
+            .ok_or_else(|| {
+                crate::Error::Config("MongoDB URI required: pass --uri or set mongodb.uri".into())
+            })?,
+    };
     let driver = crate::mongo::MongoDriver::connect(&uri)?;
     let mut runs = crate::bench::run_bench(
         &driver,

@@ -194,7 +194,10 @@ mod exec {
 
     pub struct BenchOptions {
         pub sizes: Vec<u64>,
-        /// Leave the bench database and dump directory in place (debug).
+        /// Leave the bench database and dump directory in place (debug). With
+        /// multiple `sizes`, each size's database is guarded/dropped before
+        /// the next size seeds, so only the *last* size's database and dump
+        /// directory are actually kept.
         pub keep: bool,
     }
 
@@ -213,7 +216,6 @@ mod exec {
     }
 
     pub fn run_bench(driver: &MongoDriver, opts: &BenchOptions) -> Result<Vec<BenchRun>> {
-        guard_bench_db(driver)?;
         opts.sizes
             .iter()
             .map(|&n| bench_one(driver, n, opts.keep))
@@ -237,6 +239,12 @@ mod exec {
     }
 
     fn bench_one(driver: &MongoDriver, n: u64, keep: bool) -> Result<BenchRun> {
+        // Guarded per size (not once per `run_bench`): with multiple sizes and
+        // `--keep`, the previous size's database is a leftover that must be
+        // dropped before this size seeds, or documents accumulate across
+        // sizes. It always carries the marker (see the invariant below), so
+        // the guard auto-drops it instead of refusing.
+        guard_bench_db(driver)?;
         log::info!("bench: seeding {n} documents into {BENCH_DB}.{COLLECTION}");
         driver.ensure_collection(BENCH_DB, MARKER, &None, &BTreeMap::new())?;
         driver.ensure_collection(BENCH_DB, COLLECTION, &None, &BTreeMap::new())?;
