@@ -69,6 +69,9 @@ pub struct RestoreArgs {
     /// Abort the whole restore on a non-excluded error.
     #[arg(long)]
     pub exit_on_error: bool,
+    /// Drop each restored collection before recreating it from the dump.
+    #[arg(long)]
+    pub clean: bool,
 }
 
 /// Flags for the `validate` command.
@@ -479,6 +482,8 @@ fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> crate::Result<()> {
         insert_error_exclusions: ErrorExclusions,
         #[serde(default)]
         scripts: Scripts,
+        #[serde(default)]
+        clean: bool,
     }
     let section: RestoreSection = if config.restore.is_null() {
         RestoreSection::default()
@@ -498,6 +503,7 @@ fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> crate::Result<()> {
         ordered: args.ordered,
         dependency_order: args.dependency_order,
         exit_on_error: args.exit_on_error,
+        clean: args.clean || section.clean,
     };
     let restore = Restore {
         storage: storage.as_ref(),

@@ -155,6 +155,10 @@ pub trait MongoSink {
 
     /// Create an index on a collection.
     fn create_index(&self, database: &str, collection: &str, index: &IndexSpec) -> Result<()>;
+
+    /// Drop a collection entirely (data and indexes), for `--clean` restores.
+    /// A collection that does not exist is not an error.
+    fn drop_collection(&self, database: &str, collection: &str) -> Result<()>;
 }
 
 /// An in-memory MongoDB stand-in implementing both source and sink, used by the
@@ -284,6 +288,14 @@ impl MongoSink for InMemoryMongo {
         if !entry.indexes.iter().any(|i| i.name == index.name) {
             entry.indexes.push(index.clone());
         }
+        Ok(())
+    }
+
+    fn drop_collection(&self, database: &str, collection: &str) -> Result<()> {
+        self.inner
+            .lock()
+            .unwrap()
+            .remove(&(database.to_string(), collection.to_string()));
         Ok(())
     }
 }
@@ -606,6 +618,16 @@ mod driver {
                 .block_on(coll.create_index(model).into_future())
                 .map(|_| ())
                 .map_err(|e| Error::Mongo(format!("create index: {e}")))
+        }
+
+        fn drop_collection(&self, database: &str, collection: &str) -> Result<()> {
+            let coll = self.coll(database, collection);
+            match self.rt.block_on(coll.drop().into_future()) {
+                Ok(()) => Ok(()),
+                // NamespaceNotFound (26) — nothing to drop, fine.
+                Err(e) if error_code(&e) == Some(26) => Ok(()),
+                Err(e) => Err(Error::Mongo(format!("drop collection: {e}"))),
+            }
         }
     }
 

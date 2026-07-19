@@ -34,6 +34,10 @@ pub struct RestoreOptions {
     pub dependency_order: bool,
     /// Abort the whole restore (not just the collection) on an error.
     pub exit_on_error: bool,
+    /// Drop each restored collection (data and indexes) before recreating it
+    /// from the dump, so re-running a restore against the same target is
+    /// idempotent instead of hitting `_id` duplicate-key errors.
+    pub clean: bool,
 }
 
 impl RestoreOptions {
@@ -91,6 +95,9 @@ impl<'a> Restore<'a> {
                     coll.name,
                     cmeta.document_count
                 );
+                if self.options.clean {
+                    self.sink.drop_collection(&db.name, &coll.name)?;
+                }
                 self.sink.ensure_collection(
                     &db.name,
                     &coll.name,
@@ -308,6 +315,68 @@ mod tests {
         assert_eq!(sink.documents("app", "users").len(), 2);
     }
 
+    // Acceptance: re-running a restore into a target that already holds data
+    // from a previous run hits `_id` duplicate-key errors and fails the
+    // collection when `clean` is not set.
+    #[test]
+    fn without_clean_preexisting_data_causes_duplicate_key_failure() {
+        let (_d, s) = seed_dump("20260701", &[doc(1), doc(2)], vec![]);
+        let sink = InMemoryMongo::new();
+        sink.seed(CollectionData {
+            database: "app".into(),
+            collection: "users".into(),
+            documents: vec![doc(1)],
+            ..Default::default()
+        });
+        let r = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
+        };
+        let report = r.run("latest", &NoScripts).unwrap();
+        assert_eq!(report.failed, vec!["app.users".to_string()]);
+    }
+
+    // `clean: true` drops the collection (including stale data from a
+    // previous run) before restoring, so the same restore is idempotent.
+    #[test]
+    fn clean_drops_collection_before_restore() {
+        let (_d, s) = seed_dump("20260701", &[doc(1), doc(2)], vec![]);
+        let sink = InMemoryMongo::new();
+        sink.seed(CollectionData {
+            database: "app".into(),
+            collection: "users".into(),
+            documents: vec![doc(1), doc(99)],
+            ..Default::default()
+        });
+        let r = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                clean: true,
+                ..Default::default()
+            },
+        };
+        let report = r.run("latest", &NoScripts).unwrap();
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert_eq!(report.inserted, 2);
+        let mut ids: Vec<i64> = sink
+            .documents("app", "users")
+            .iter()
+            .map(|d| d.get_i64("_id").unwrap())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
     // Acceptance: an explicit missing dump id fails with a clear error.
     #[test]
     fn missing_dump_is_clear_error() {
@@ -456,6 +525,9 @@ mod tests {
         }
         fn create_index(&self, database: &str, collection: &str, index: &IndexSpec) -> Result<()> {
             self.inner.create_index(database, collection, index)
+        }
+        fn drop_collection(&self, database: &str, collection: &str) -> Result<()> {
+            self.inner.drop_collection(database, collection)
         }
     }
 
