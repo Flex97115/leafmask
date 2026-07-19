@@ -269,7 +269,7 @@ git commit -m "feat(dump): allow include/exclude db and collection filters in co
 **Files:**
 - Modify: `src/cli.rs`
   - Insert new function directly after `dump_filter_lists` (added by Task 2, right after `transformation_configs`), before `pub fn run`, for locality with the other filter-list parser.
-  - Modify `cmd_restore` (currently lines 369–410, before Task 2's edits; Task 2 does not change `cmd_restore`, only `cmd_dump`, so these line numbers are stable across Task 2)
+  - Modify `cmd_restore` (currently lines 403–444, after Task 2's edits — Task 2 inserted `dump_filter_lists` earlier in the file, shifting `cmd_restore` down; match by code content, not line number, since exact numbers will have shifted again once your own new lines are added)
   - Test: append to `mod tests`
 
 **Interfaces:**
@@ -373,7 +373,7 @@ Expected: PASS (9 passed — 6 from Tasks 1–2 + 3 new)
 
 - [ ] **Step 5: Wire `restore_filter_lists` + `resolve_list` into `cmd_restore`**
 
-In `cmd_restore` (currently lines 369–410), the `let options = RestoreOptions { ... };` block (currently lines 391–400) changes from:
+In `cmd_restore` (currently lines 403–444), the `let options = RestoreOptions { ... };` block (currently lines 425–434) changes from:
 
 ```rust
     let options = RestoreOptions {
@@ -405,7 +405,7 @@ to:
     };
 ```
 
-This must be inserted **before** the existing `let section: RestoreSection = ...` block is consumed by the later `Restore { ... exclusions: section.insert_error_exclusions, scripts: section.scripts, ... }` — placing the new `let (cfg_include_coll, ...)` line immediately above `let options = RestoreOptions { ... }` (i.e. right after the existing `let section: RestoreSection = if config.restore.is_null() { ... };` block, currently ending line 389) keeps that ordering intact; no other lines in `cmd_restore` move.
+This must be inserted **before** the existing `let section: RestoreSection = ...` block is consumed by the later `Restore { ... exclusions: section.insert_error_exclusions, scripts: section.scripts, ... }` — placing the new `let (cfg_include_coll, ...)` line immediately above `let options = RestoreOptions { ... }` (i.e. right after the existing `let section: RestoreSection = if config.restore.is_null() { ... };` block, currently ending line 423) keeps that ordering intact; no other lines in `cmd_restore` move.
 
 - [ ] **Step 6: Confirm the crate builds with the `mongo` feature**
 
