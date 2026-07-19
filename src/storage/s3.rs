@@ -98,28 +98,32 @@ mod imp {
     impl Storage for S3Storage {
         fn list_dumps(&self) -> Result<Vec<String>> {
             let prefix = join_key(&self.cfg.prefix, "");
-            let resp = self
-                .rt
-                .block_on(
-                    self.client
-                        .list_objects_v2()
-                        .bucket(&self.cfg.bucket)
-                        .prefix(&prefix)
-                        .delimiter("/")
-                        .send(),
-                )
-                .map_err(|e| Error::Storage(e.to_string()))?;
-            let mut ids: Vec<String> = resp
-                .common_prefixes()
-                .iter()
-                .filter_map(|cp| cp.prefix())
-                .filter_map(|p| {
-                    p.trim_end_matches('/')
-                        .rsplit('/')
-                        .next()
-                        .map(str::to_string)
-                })
-                .collect();
+            let mut ids: Vec<String> = Vec::new();
+            let mut pages = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.cfg.bucket)
+                .prefix(&prefix)
+                .delimiter("/")
+                .into_paginator()
+                .send();
+            self.rt.block_on(async {
+                while let Some(page) = pages.next().await {
+                    let page = page.map_err(|e| Error::Storage(e.to_string()))?;
+                    ids.extend(
+                        page.common_prefixes()
+                            .iter()
+                            .filter_map(|cp| cp.prefix())
+                            .filter_map(|p| {
+                                p.trim_end_matches('/')
+                                    .rsplit('/')
+                                    .next()
+                                    .map(str::to_string)
+                            }),
+                    );
+                }
+                Ok::<(), Error>(())
+            })?;
             ids.sort();
             Ok(ids)
         }
@@ -160,16 +164,23 @@ mod imp {
 
         fn exists(&self, path: &str) -> Result<bool> {
             let key = self.cfg.object_key(path);
-            Ok(self
-                .rt
-                .block_on(
-                    self.client
-                        .head_object()
-                        .bucket(&self.cfg.bucket)
-                        .key(&key)
-                        .send(),
-                )
-                .is_ok())
+            match self.rt.block_on(
+                self.client
+                    .head_object()
+                    .bucket(&self.cfg.bucket)
+                    .key(&key)
+                    .send(),
+            ) {
+                Ok(_) => Ok(true),
+                Err(e) => {
+                    let svc = e.into_service_error();
+                    if svc.is_not_found() {
+                        Ok(false)
+                    } else {
+                        Err(Error::Storage(svc.to_string()))
+                    }
+                }
+            }
         }
 
         fn put_file(&self, path: &str, local: &std::path::Path) -> Result<()> {
@@ -241,44 +252,53 @@ mod imp {
 
         fn list(&self, prefix: &str) -> Result<Vec<String>> {
             let full = self.cfg.object_key(prefix);
-            let resp = self
-                .rt
-                .block_on(
-                    self.client
-                        .list_objects_v2()
-                        .bucket(&self.cfg.bucket)
-                        .prefix(&full)
-                        .send(),
-                )
-                .map_err(|e| Error::Storage(e.to_string()))?;
             let strip = join_key(&self.cfg.prefix, "");
-            let mut out: Vec<String> = resp
-                .contents()
-                .iter()
-                .filter_map(|o| o.key())
-                .map(|k| k.strip_prefix(&strip).unwrap_or(k).to_string())
-                .collect();
+            let mut out: Vec<String> = Vec::new();
+            let mut pages = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.cfg.bucket)
+                .prefix(&full)
+                .into_paginator()
+                .send();
+            self.rt.block_on(async {
+                while let Some(page) = pages.next().await {
+                    let page = page.map_err(|e| Error::Storage(e.to_string()))?;
+                    out.extend(
+                        page.contents()
+                            .iter()
+                            .filter_map(|o| o.key())
+                            .map(|k| k.strip_prefix(&strip).unwrap_or(k).to_string()),
+                    );
+                }
+                Ok::<(), Error>(())
+            })?;
             out.sort();
             Ok(out)
         }
 
         fn size(&self, prefix: &str) -> Result<u64> {
             let full = self.cfg.object_key(prefix);
-            let resp = self
-                .rt
-                .block_on(
-                    self.client
-                        .list_objects_v2()
-                        .bucket(&self.cfg.bucket)
-                        .prefix(&full)
-                        .send(),
-                )
-                .map_err(|e| Error::Storage(e.to_string()))?;
-            Ok(resp
-                .contents()
-                .iter()
-                .map(|o| o.size().unwrap_or(0).max(0) as u64)
-                .sum())
+            let mut total = 0u64;
+            let mut pages = self
+                .client
+                .list_objects_v2()
+                .bucket(&self.cfg.bucket)
+                .prefix(&full)
+                .into_paginator()
+                .send();
+            self.rt.block_on(async {
+                while let Some(page) = pages.next().await {
+                    let page = page.map_err(|e| Error::Storage(e.to_string()))?;
+                    total += page
+                        .contents()
+                        .iter()
+                        .map(|o| o.size().unwrap_or(0).max(0) as u64)
+                        .sum::<u64>();
+                }
+                Ok::<(), Error>(())
+            })?;
+            Ok(total)
         }
     }
 }
