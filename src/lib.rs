@@ -8,6 +8,7 @@
 
 pub mod error;
 
+pub mod bench;
 pub mod catalog;
 pub mod cli;
 pub mod config;
