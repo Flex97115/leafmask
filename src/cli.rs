@@ -209,6 +209,34 @@ fn transformation_configs(
     Ok(section.transformation)
 }
 
+/// Parse `dump.subset_conds` (collection -> expression string) into the
+/// per-collection MongoDB filters `Dump.filters` expects, so the condition is
+/// pushed down to the server instead of every document being fetched and
+/// discarded after the fact.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn dump_subset_filters(
+    config: &crate::config::Config,
+) -> crate::Result<std::collections::BTreeMap<String, bson::Document>> {
+    if config.dump.is_null() {
+        return Ok(Default::default());
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DumpSection {
+        #[serde(default)]
+        subset_conds: std::collections::BTreeMap<String, String>,
+    }
+    let section: DumpSection = serde_yaml::from_value(config.dump.clone())
+        .map_err(|e| crate::Error::Config(format!("dump.subset_conds: {e}")))?;
+    section
+        .subset_conds
+        .into_iter()
+        .map(|(collection, expr)| {
+            let filter = crate::transform::condition::Condition::parse(&expr)?.to_filter();
+            Ok((collection, filter))
+        })
+        .collect()
+}
+
 /// Four filter lists in `(include, exclude, ...)` pairs, as returned by
 /// `dump_filter_lists`/`restore_filter_lists`.
 type FilterListQuad = (Vec<String>, Vec<String>, Vec<String>, Vec<String>);
@@ -428,7 +456,7 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
         } else {
             Some(&plan)
         },
-        filters: std::collections::BTreeMap::new(),
+        filters: dump_subset_filters(&config)?,
         options,
     };
     let meta = dump.run(chrono::Utc::now())?;
@@ -589,6 +617,25 @@ mod tests {
                 .unwrap();
         let (include_db, _, _, _) = dump_filter_lists(&config).unwrap();
         assert_eq!(include_db, vec!["shop".to_string()]);
+    }
+
+    #[test]
+    fn dump_subset_filters_translates_expressions_to_mongo_filters() {
+        let config =
+            crate::config::parse_str("dump:\n  subset_conds:\n    events: \"value >= 3\"\n")
+                .unwrap();
+        let filters = dump_subset_filters(&config).unwrap();
+        let expected = crate::transform::condition::Condition::parse("value >= 3")
+            .unwrap()
+            .to_filter();
+        assert_eq!(filters.get("events"), Some(&expected));
+    }
+
+    #[test]
+    fn dump_subset_filters_defaults_to_empty_without_subset_conds() {
+        let config = crate::config::parse_str("dump:\n  include_databases: [shop]\n").unwrap();
+        let filters = dump_subset_filters(&config).unwrap();
+        assert!(filters.is_empty());
     }
 
     #[test]
