@@ -144,10 +144,20 @@ mod imp {
         }
 
         fn size(&self, prefix: &str) -> Result<u64> {
+            // The listing already carries each blob's content length — sizing
+            // a dump must not download it.
+            let full = self.cfg.blob_name(prefix);
+            let mut stream = self.container.list_blobs().prefix(full).into_stream();
             let mut total = 0u64;
-            for rel in self.list(prefix)? {
-                total += self.get(&rel)?.len() as u64;
-            }
+            self.rt.block_on(async {
+                while let Some(page) = stream.next().await {
+                    let page = page.map_err(|e| Error::Storage(e.to_string()))?;
+                    for blob in page.blobs.blobs() {
+                        total += blob.properties.content_length;
+                    }
+                }
+                Ok::<(), Error>(())
+            })?;
             Ok(total)
         }
     }

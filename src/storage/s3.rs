@@ -172,6 +172,57 @@ mod imp {
                 .is_ok())
         }
 
+        fn put_file(&self, path: &str, local: &std::path::Path) -> Result<()> {
+            let key = self.cfg.object_key(path);
+            // ByteStream::from_path streams the file from disk; the blob is
+            // never buffered whole in memory.
+            let body = self
+                .rt
+                .block_on(ByteStream::from_path(local))
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            self.rt
+                .block_on(
+                    self.client
+                        .put_object()
+                        .bucket(&self.cfg.bucket)
+                        .key(&key)
+                        .body(body)
+                        .send(),
+                )
+                .map_err(|e| Error::Storage(e.to_string()))?;
+            Ok(())
+        }
+
+        fn get_reader(&self, path: &str) -> Result<Box<dyn std::io::Read + Send>> {
+            use std::io::Write;
+
+            let key = self.cfg.object_key(path);
+            let resp = self
+                .rt
+                .block_on(
+                    self.client
+                        .get_object()
+                        .bucket(&self.cfg.bucket)
+                        .key(&key)
+                        .send(),
+                )
+                .map_err(|_| Error::NotFound(format!("blob '{path}' not found")))?;
+            // Spool the object to local disk chunk by chunk, then hand back a
+            // file reader: bounded memory for arbitrarily large blobs.
+            let (mut file, spool) = crate::storage::download_spool()?;
+            let mut body = resp.body;
+            while let Some(chunk) = self
+                .rt
+                .block_on(body.try_next())
+                .map_err(|e| Error::Storage(e.to_string()))?
+            {
+                file.write_all(&chunk)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
+            }
+            drop(file);
+            crate::storage::open_and_remove_spool(&spool)
+        }
+
         fn delete(&self, prefix: &str) -> Result<()> {
             for rel in self.list(prefix)? {
                 let key = self.cfg.object_key(&rel);

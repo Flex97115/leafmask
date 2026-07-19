@@ -1,14 +1,16 @@
 //! Restore a dump to a target database (feature `restore.database`).
 //!
 //! Reads a stored dump (by id or `latest`) and writes it into a target via the
-//! [`MongoSink`] trait: include/exclude filters, parallel-capable batched bulk
-//! writes (ordered or unordered), optional dependency ordering (documents before
-//! indexes/validators), pre/post scripts, and tolerated insert errors. The sink
-//! is abstracted so the driver is unit-tested without a live MongoDB.
+//! [`MongoSink`] trait: include/exclude filters, batched bulk writes (ordered
+//! or unordered), optional dependency ordering (documents before
+//! indexes/validators), pre/post scripts, and tolerated insert errors.
+//! Documents are streamed out of storage and inserted `batch_size` at a time,
+//! so restoring a collection never holds more than one batch in memory. The
+//! sink is abstracted so the driver is unit-tested without a live MongoDB.
 
 use bson::Document;
 
-use crate::dump::{read_collection_full, resolve, DumpMetadata};
+use crate::dump::{open_document_reader, read_collection_meta, resolve, DumpMetadata};
 use crate::error::{Error, Result};
 use crate::mongo::MongoSink;
 use crate::storage::Storage;
@@ -64,6 +66,9 @@ pub struct RestoreReport {
     pub inserted: u64,
     pub skipped: u64,
     pub indexes_created: u64,
+    /// Collections (`db.coll`) aborted by a non-excluded insert error. Empty
+    /// on a fully successful restore; the CLI exits non-zero otherwise.
+    pub failed: Vec<String>,
 }
 
 impl<'a> Restore<'a> {
@@ -79,30 +84,47 @@ impl<'a> Restore<'a> {
                 if !self.options.include_collection(&coll.name) {
                     continue;
                 }
-                let data = read_collection_full(self.storage, &meta.id, &db.name, &coll.name)?;
+                let cmeta = read_collection_meta(self.storage, &meta.id, &db.name, &coll.name)?;
+                log::info!(
+                    "  {}.{}: restoring {} documents",
+                    db.name,
+                    coll.name,
+                    cmeta.document_count
+                );
                 self.sink.ensure_collection(
                     &db.name,
                     &coll.name,
-                    &data.validator,
-                    &data.options,
+                    &cmeta.validator,
+                    &cmeta.options,
                 )?;
 
-                self.insert_documents(&db.name, &coll.name, &data.documents, &mut report)?;
+                match self.insert_documents(&meta.id, &db.name, &coll.name, &mut report) {
+                    Ok(()) => {}
+                    Err(e) if self.options.exit_on_error => return Err(e),
+                    Err(e) => {
+                        // The collection is reported failed; the restore moves
+                        // on to the next collection (mongorestore semantics).
+                        log::error!("  {}.{}: {e}", db.name, coll.name);
+                        report.failed.push(format!("{}.{}", db.name, coll.name));
+                        continue;
+                    }
+                }
 
                 if !self.options.dependency_order {
-                    self.create_indexes(&db.name, &coll.name, &data.indexes, &mut report)?;
+                    self.create_indexes(&db.name, &coll.name, &cmeta.indexes, &mut report)?;
                 }
             }
         }
 
         // In dependency order, indexes/validators come after all documents.
+        // Only the (small) structure blob is re-read, never the documents.
         if self.options.dependency_order {
             for db in &meta.databases {
                 for coll in &db.collections {
                     if self.options.include_collection(&coll.name) {
-                        let data =
-                            read_collection_full(self.storage, &meta.id, &db.name, &coll.name)?;
-                        self.create_indexes(&db.name, &coll.name, &data.indexes, &mut report)?;
+                        let cmeta =
+                            read_collection_meta(self.storage, &meta.id, &db.name, &coll.name)?;
+                        self.create_indexes(&db.name, &coll.name, &cmeta.indexes, &mut report)?;
                     }
                 }
             }
@@ -112,33 +134,62 @@ impl<'a> Restore<'a> {
         Ok(report)
     }
 
+    /// Stream a collection's documents out of the dump and insert them
+    /// `batch_size` at a time through [`MongoSink::insert_many`].
     fn insert_documents(
+        &self,
+        dump_id: &str,
+        db: &str,
+        coll: &str,
+        report: &mut RestoreReport,
+    ) -> Result<()> {
+        let batch_size = self.options.batch_size.max(1);
+        let mut reader = open_document_reader(self.storage, dump_id, db, coll)?;
+        loop {
+            let batch = reader.next_batch(batch_size)?;
+            if batch.is_empty() {
+                return Ok(());
+            }
+            self.insert_batch(db, coll, &batch, report)?;
+            if report.inserted % 100_000 < batch_size as u64 && report.inserted >= 100_000 {
+                log::info!("  {db}.{coll}: {} documents...", report.inserted);
+            }
+        }
+    }
+
+    /// Insert one batch, honouring error exclusions. With ordered writes an
+    /// excluded failure stops the server-side batch, so the remainder is
+    /// re-submitted starting right after the failed document.
+    fn insert_batch(
         &self,
         db: &str,
         coll: &str,
-        docs: &[Document],
+        batch: &[Document],
         report: &mut RestoreReport,
     ) -> Result<()> {
-        let batch = self.options.batch_size.max(1);
-        for chunk in docs.chunks(batch) {
-            for doc in chunk {
-                match self.sink.insert(db, coll, doc) {
-                    Ok(()) => report.inserted += 1,
-                    Err(err) => {
-                        if self.exclusions.is_excluded(coll, &err) {
-                            report.skipped += 1;
-                            continue; // logged & skipped, restoration continues.
-                        }
-                        return Err(Error::Restore(format!(
-                            "insert into {db}.{coll} failed (code {:?}, index {:?})",
-                            err.code, err.index_name
-                        )));
-                    }
+        let mut start = 0;
+        while start < batch.len() {
+            let out = self
+                .sink
+                .insert_many(db, coll, &batch[start..], self.options.ordered)?;
+            report.inserted += out.inserted;
+            if out.failures.is_empty() {
+                return Ok(());
+            }
+            for (_, err) in &out.failures {
+                if self.exclusions.is_excluded(coll, err) {
+                    report.skipped += 1; // logged & skipped, restoration continues.
+                } else {
+                    return Err(Error::Restore(format!(
+                        "insert into {db}.{coll} failed (code {:?}, index {:?})",
+                        err.code, err.index_name
+                    )));
                 }
-                // An ordered bulk write would stop the batch at a hard error; we
-                // already returned above for those, so ordering only affects how
-                // far an unexcluded error propagates, handled by the early return.
-                let _ = self.options.ordered;
+            }
+            if self.options.ordered {
+                start += out.failures[0].0 + 1;
+            } else {
+                return Ok(()); // unordered attempted every document.
             }
         }
         Ok(())
@@ -315,9 +366,10 @@ mod tests {
         assert_eq!(created, vec!["keep_idx".to_string()]);
     }
 
-    // Acceptance: a tolerated insert error is skipped; an untolerated one aborts.
+    // Acceptance: a tolerated insert error is skipped; an untolerated one fails
+    // the collection (surfaced in the report) without silently succeeding.
     #[test]
-    fn error_exclusions_skip_or_abort() {
+    fn error_exclusions_skip_or_fail_collection() {
         let (_d, s) = seed_dump("20260701", &[doc(1), doc(1)], vec![]); // duplicate _id
                                                                         // With 11000 excluded, the duplicate is skipped.
         let sink = InMemoryMongo::new();
@@ -335,8 +387,9 @@ mod tests {
         let report = r.run("20260701", &NoScripts).unwrap();
         assert_eq!(report.inserted, 1);
         assert_eq!(report.skipped, 1);
+        assert!(report.failed.is_empty());
 
-        // Without the exclusion, the duplicate aborts the restore.
+        // Without the exclusion, the collection is reported failed.
         let sink2 = InMemoryMongo::new();
         let r2 = Restore {
             storage: &s,
@@ -348,6 +401,110 @@ mod tests {
                 ..Default::default()
             },
         };
-        assert!(r2.run("20260701", &NoScripts).is_err());
+        let report = r2.run("20260701", &NoScripts).unwrap();
+        assert_eq!(report.failed, vec!["app.users".to_string()]);
+
+        // With --exit-on-error, the same failure aborts the whole restore.
+        let sink3 = InMemoryMongo::new();
+        let r3 = Restore {
+            storage: &s,
+            sink: &sink3,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                exit_on_error: true,
+                ..Default::default()
+            },
+        };
+        assert!(r3.run("20260701", &NoScripts).is_err());
+    }
+
+    /// A sink that records the size of every insert_many batch it receives.
+    struct BatchSpy {
+        inner: InMemoryMongo,
+        batches: std::sync::Mutex<Vec<usize>>,
+    }
+    impl MongoSink for BatchSpy {
+        fn ensure_collection(
+            &self,
+            database: &str,
+            collection: &str,
+            validator: &Option<Bson>,
+            options: &std::collections::BTreeMap<String, Bson>,
+        ) -> Result<()> {
+            self.inner
+                .ensure_collection(database, collection, validator, options)
+        }
+        fn insert(
+            &self,
+            database: &str,
+            collection: &str,
+            doc: &Document,
+        ) -> std::result::Result<(), crate::restore::InsertError> {
+            self.inner.insert(database, collection, doc)
+        }
+        fn insert_many(
+            &self,
+            database: &str,
+            collection: &str,
+            docs: &[Document],
+            ordered: bool,
+        ) -> Result<crate::mongo::BatchInsert> {
+            self.batches.lock().unwrap().push(docs.len());
+            self.inner.insert_many(database, collection, docs, ordered)
+        }
+        fn create_index(&self, database: &str, collection: &str, index: &IndexSpec) -> Result<()> {
+            self.inner.create_index(database, collection, index)
+        }
+    }
+
+    // The restore hot path must go through batched insert_many calls sized by
+    // --batch-size, not one server round-trip per document.
+    #[test]
+    fn inserts_in_batches_of_batch_size() {
+        let docs: Vec<Document> = (1..=25).map(doc).collect();
+        let (_d, s) = seed_dump("20260701", &docs, vec![]);
+        let sink = BatchSpy {
+            inner: InMemoryMongo::new(),
+            batches: Default::default(),
+        };
+        let r = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
+        };
+        let report = r.run("20260701", &NoScripts).unwrap();
+        assert_eq!(report.inserted, 25);
+        assert_eq!(*sink.batches.lock().unwrap(), vec![10, 10, 5]);
+    }
+
+    // Ordered writes stop a batch at its first failure; an excluded failure
+    // must resume the batch right after the failed document, not lose the rest.
+    #[test]
+    fn ordered_batch_resumes_after_excluded_failure() {
+        let (_d, s) = seed_dump("20260701", &[doc(1), doc(1), doc(2)], vec![]);
+        let sink = InMemoryMongo::new();
+        let excl: ErrorExclusions = serde_yaml::from_str("global_error_codes: [11000]\n").unwrap();
+        let r = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: excl,
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                ordered: true,
+                ..Default::default()
+            },
+        };
+        let report = r.run("20260701", &NoScripts).unwrap();
+        assert_eq!(report.inserted, 2);
+        assert_eq!(report.skipped, 1);
+        assert_eq!(sink.documents("app", "users").len(), 2);
     }
 }

@@ -8,16 +8,20 @@
 //!
 //! A dump requires `common.tmp_dir`; without it the command fails fast.
 
+use std::collections::BTreeMap;
+
+use bson::Document;
 use chrono::{DateTime, Utc};
 
 use crate::error::{Error, Result};
 use crate::hash::HashEngine;
-use crate::mongo::{CollectionData, MongoSource};
+use crate::mongo::{CollectionStructure, MongoSource};
 use crate::storage::Storage;
 use crate::transform::{apply::TransformationPlan, Registry};
 
 use super::{
-    write_collection_data, write_metadata, CollectionToc, DatabaseToc, DumpMetadata, DumpStatus,
+    data_path, write_collection_meta, write_metadata, CollectionDataWriter, CollectionMeta,
+    CollectionToc, DatabaseToc, DumpMetadata, DumpStatus,
 };
 
 /// Filters and options controlling a dump.
@@ -60,44 +64,68 @@ pub struct Dump<'a> {
     pub engine: &'a HashEngine,
     /// Optional transformation plan (anonymization + query filtering).
     pub plan: Option<&'a TransformationPlan>,
+    /// Per-collection MongoDB filter (from `subset_conds` and/or a collection's
+    /// `query`), pushed down to the source so a narrow filter doesn't require
+    /// fetching the whole collection first.
+    pub filters: BTreeMap<String, Document>,
     pub options: DumpOptions,
 }
 
 impl<'a> Dump<'a> {
     /// Run the dump, stamping it with an id derived from `created_at`.
     pub fn run(&self, created_at: DateTime<Utc>) -> Result<DumpMetadata> {
-        if self.options.tmp_dir.as_deref().unwrap_or("").is_empty() {
-            return Err(Error::Config(
-                "common.tmp_dir must be configured before dumping".into(),
-            ));
-        }
+        let tmp_dir = match self.options.tmp_dir.as_deref() {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                return Err(Error::Config(
+                    "common.tmp_dir must be configured before dumping".into(),
+                ))
+            }
+        };
 
         let id = created_at.format("%Y%m%dT%H%M%SZ").to_string();
         let mut databases = Vec::new();
         let mut total_size = 0u64;
 
-        for db in self.source.databases() {
+        for db in self.source.databases()? {
             if !self.options.include_db(&db) {
                 continue;
             }
+            log::info!("dumping database {db}");
             let mut collections = Vec::new();
             let mut order = 0u32;
-            for coll in self.source.collections(&db) {
+            for coll in self.source.collections(&db)? {
                 if !self.options.include_collection(&coll) {
                     continue;
                 }
-                let source_data = self.source.read_collection(&db, &coll)?;
-                let data = self.build_collection(&coll, source_data)?;
+                let (count, size) = self.dump_collection(&id, tmp_dir, &db, &coll)?;
+                total_size += size;
 
+                let structure = if self.options.no_indexes {
+                    CollectionStructure::default()
+                } else {
+                    self.source.read_structure(&db, &coll)?
+                };
                 let toc = CollectionToc {
                     name: coll.clone(),
-                    document_count: data.documents.len() as u64,
-                    indexes: data.indexes.iter().map(|i| i.name.clone()).collect(),
+                    document_count: count,
+                    indexes: structure.indexes.iter().map(|i| i.name.clone()).collect(),
                     restore_order: order,
                 };
                 order += 1;
 
-                total_size += write_collection_data(self.storage, &id, &data, self.options.gzip)?;
+                total_size += write_collection_meta(
+                    self.storage,
+                    &id,
+                    &CollectionMeta {
+                        database: db.clone(),
+                        collection: coll.clone(),
+                        document_count: count,
+                        indexes: structure.indexes,
+                        validator: structure.validator,
+                        options: structure.options,
+                    },
+                )?;
                 collections.push(toc);
             }
             databases.push(DatabaseToc {
@@ -117,35 +145,41 @@ impl<'a> Dump<'a> {
         Ok(meta)
     }
 
-    /// Apply query filtering and transformations to one collection's documents,
-    /// and capture (or drop) its indexes/options.
-    fn build_collection(&self, coll: &str, source: CollectionData) -> Result<CollectionData> {
-        let mut documents = Vec::with_capacity(source.documents.len());
-        for doc in &source.documents {
-            if let Some(plan) = self.plan {
-                if !plan.should_include(coll, doc) {
-                    continue; // custom query filter excludes this document.
+    /// Stream one collection's documents from the source into storage —
+    /// filter pushdown, per-document transformation, and (optionally gzipped)
+    /// spooling all happen inline, so memory stays bounded regardless of the
+    /// collection's size. Returns (documents written, blob bytes).
+    fn dump_collection(&self, id: &str, tmp_dir: &str, db: &str, coll: &str) -> Result<(u64, u64)> {
+        let mut writer = CollectionDataWriter::create(tmp_dir, db, coll, self.options.gzip)?;
+        let mut read = 0u64;
+        self.source
+            .stream_documents(db, coll, self.filters.get(coll), &mut |doc| {
+                read += 1;
+                let out = match self.plan {
+                    Some(plan) => {
+                        if !plan.should_include(coll, &doc) {
+                            return Ok(()); // custom query filter excludes this document.
+                        }
+                        plan.transform(self.registry, self.engine, coll, &doc)?
+                    }
+                    None => doc,
+                };
+                writer.write_document(&out)?;
+                if writer.count() % 100_000 == 0 {
+                    log::info!("  {db}.{coll}: {} documents...", writer.count());
                 }
-                documents.push(plan.transform(self.registry, self.engine, coll, doc)?);
-            } else {
-                documents.push(doc.clone());
-            }
-        }
+                Ok(())
+            })?;
 
-        let (indexes, validator, options) = if self.options.no_indexes {
-            (Vec::new(), None, Default::default())
+        let count = writer.count();
+        let path = format!("{id}/{}", data_path(db, coll, self.options.gzip));
+        let size = writer.finish(self.storage, &path)?;
+        if count != read {
+            log::info!("  {db}.{coll}: {count} of {read} documents");
         } else {
-            (source.indexes, source.validator, source.options)
-        };
-
-        Ok(CollectionData {
-            database: source.database,
-            collection: source.collection,
-            documents,
-            indexes,
-            validator,
-            options,
-        })
+            log::info!("  {db}.{coll}: {count} documents");
+        }
+        Ok((count, size))
     }
 }
 
@@ -153,7 +187,7 @@ impl<'a> Dump<'a> {
 mod tests {
     use super::*;
     use crate::dump::{read_collection_full, read_metadata};
-    use crate::mongo::InMemoryMongo;
+    use crate::mongo::{CollectionData, InMemoryMongo};
     use crate::storage::DirectoryStorage;
     use crate::validate::IndexSpec;
     use bson::{spec::BinarySubtype, Binary, Bson, Document};
@@ -199,6 +233,7 @@ mod tests {
             registry,
             engine,
             plan: None,
+            filters: BTreeMap::new(),
             options,
         }
     }
@@ -212,7 +247,7 @@ mod tests {
         let m = source_with_users();
         let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
         let opts = DumpOptions {
-            tmp_dir: Some("/tmp".into()),
+            tmp_dir: Some(std::env::temp_dir().display().to_string()),
             ..Default::default()
         };
 
@@ -247,7 +282,7 @@ mod tests {
         });
         let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
         let opts = DumpOptions {
-            tmp_dir: Some("/tmp".into()),
+            tmp_dir: Some(std::env::temp_dir().display().to_string()),
             exclude_collections: vec!["secrets".into()],
             ..Default::default()
         };
@@ -286,7 +321,7 @@ mod tests {
         });
         let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
         let opts = DumpOptions {
-            tmp_dir: Some("/tmp".into()),
+            tmp_dir: Some(std::env::temp_dir().display().to_string()),
             gzip: true,
             ..Default::default()
         };
@@ -315,6 +350,75 @@ mod tests {
         assert!(err.to_string().contains("tmp_dir"), "{err}");
     }
 
+    // The dump must go through the streaming source APIs (structure + document
+    // stream), never the materialize-everything read_collection: a source that
+    // panics on read_collection still dumps fine.
+    #[test]
+    fn dump_streams_documents_instead_of_materializing() {
+        use crate::mongo::CollectionStructure;
+
+        struct StreamOnly;
+        impl MongoSource for StreamOnly {
+            fn databases(&self) -> crate::error::Result<Vec<String>> {
+                Ok(vec!["app".into()])
+            }
+            fn collections(&self, _db: &str) -> crate::error::Result<Vec<String>> {
+                Ok(vec!["users".into()])
+            }
+            fn read_collection(
+                &self,
+                _db: &str,
+                _coll: &str,
+            ) -> crate::error::Result<CollectionData> {
+                panic!("dump must not materialize whole collections");
+            }
+            fn read_structure(
+                &self,
+                _db: &str,
+                _coll: &str,
+            ) -> crate::error::Result<CollectionStructure> {
+                Ok(CollectionStructure::default())
+            }
+            fn stream_documents(
+                &self,
+                _db: &str,
+                _coll: &str,
+                _filter: Option<&Document>,
+                f: &mut dyn FnMut(Document) -> crate::error::Result<()>,
+            ) -> crate::error::Result<()> {
+                for i in 0..10i64 {
+                    let mut d = Document::new();
+                    d.insert("_id", i);
+                    f(d)?;
+                }
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let s = DirectoryStorage::new(dir.path()).unwrap();
+        let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = Dump {
+            storage: &s,
+            source: &StreamOnly,
+            registry: &r,
+            engine: &e,
+            plan: None,
+            filters: BTreeMap::new(),
+            options: DumpOptions {
+                tmp_dir: Some(tmp.path().display().to_string()),
+                ..Default::default()
+            },
+        };
+        let meta = d.run(at("2026-07-18T12:00:00Z")).unwrap();
+        assert_eq!(meta.databases[0].collections[0].document_count, 10);
+        let docs = crate::dump::read_collection_data(&s, &meta.id, "app", "users").unwrap();
+        assert_eq!(docs.len(), 10);
+        // The spool file is cleaned up from tmp_dir after upload.
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
     // Transformations are applied inline while dumping.
     #[test]
     fn transformations_applied_during_dump() {
@@ -334,8 +438,9 @@ mod tests {
             registry: &r,
             engine: &e,
             plan: Some(&plan),
+            filters: BTreeMap::new(),
             options: DumpOptions {
-                tmp_dir: Some("/tmp".into()),
+                tmp_dir: Some(std::env::temp_dir().display().to_string()),
                 ..Default::default()
             },
         };

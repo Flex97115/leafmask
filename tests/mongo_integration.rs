@@ -63,8 +63,8 @@ fn sink_and_source_round_trip_through_real_mongo() {
     m.create_index(&db, "users", &idx).unwrap();
 
     // enumeration sees the db and collection.
-    assert!(m.databases().contains(&db));
-    assert_eq!(m.collections(&db), vec!["users".to_string()]);
+    assert!(m.databases().unwrap().contains(&db));
+    assert_eq!(m.collections(&db).unwrap(), vec!["users".to_string()]);
 
     // read back documents + the index we created.
     let data = m.read_collection(&db, "users").unwrap();
@@ -125,6 +125,7 @@ fn dump_then_restore_round_trip() {
         registry: &registry,
         engine: &engine,
         plan: None,
+        filters: BTreeMap::new(),
         options: DumpOptions {
             tmp_dir: Some(dir.path().display().to_string()),
             include_databases: vec![db.clone()],
@@ -192,6 +193,7 @@ fn transformation_applied_on_real_dump() {
         registry: &registry,
         engine: &engine,
         plan: Some(&plan),
+        filters: BTreeMap::new(),
         options: DumpOptions {
             tmp_dir: Some(dir.path().display().to_string()),
             include_databases: vec![db.clone()],
@@ -267,4 +269,191 @@ fn dump_filters_from_config_include_databases_without_cli_flag() {
 
     m.drop_database(&wanted).unwrap();
     m.drop_database(&skipped).unwrap();
+}
+
+// A larger round-trip through the real driver: thousands of documents are
+// dumped (gzip, streamed) and restored in insert_many batches — the 10M+
+// collection path in miniature. The restored count and a spot-checked document
+// must match exactly.
+#[test]
+fn large_dump_restore_round_trip_in_batches() {
+    let m = connect();
+    let db = db_name("big");
+    const N: i64 = 5_000;
+
+    // Seed via bulk inserts (also exercises the driver's insert_many).
+    let docs: Vec<Document> = (0..N)
+        .map(|i| doc! { "_id": i, "email": format!("u{i}@x.com"), "n": i })
+        .collect();
+    for chunk in docs.chunks(1_000) {
+        let out = m.insert_many(&db, "users", chunk, false).unwrap();
+        assert_eq!(out.inserted, chunk.len() as u64);
+        assert!(out.failures.is_empty());
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let storage = DirectoryStorage::new(dir.path()).unwrap();
+    let registry = Registry::with_builtins();
+    let engine = HashEngine::new("salt");
+    let meta = Dump {
+        storage: &storage,
+        source: &m,
+        registry: &registry,
+        engine: &engine,
+        plan: None,
+        filters: BTreeMap::new(),
+        options: DumpOptions {
+            tmp_dir: Some(dir.path().display().to_string()),
+            include_databases: vec![db.clone()],
+            gzip: true,
+            ..Default::default()
+        },
+    }
+    .run(chrono::Utc::now())
+    .unwrap();
+    assert_eq!(meta.databases[0].collections[0].document_count, N as u64);
+
+    m.drop_database(&db).unwrap();
+
+    let report = Restore {
+        storage: &storage,
+        sink: &m,
+        exclusions: ErrorExclusions::default(),
+        scripts: Default::default(),
+        options: RestoreOptions {
+            batch_size: 500,
+            ..Default::default()
+        },
+    }
+    .run(
+        &meta.id,
+        &leafmask::restore::ProcessScriptRunner::new(uri()),
+    )
+    .unwrap();
+    assert_eq!(report.inserted, N as u64);
+    assert!(report.failed.is_empty());
+
+    let restored = m.read_collection(&db, "users").unwrap();
+    assert_eq!(restored.documents.len(), N as usize);
+    let one = restored
+        .documents
+        .iter()
+        .find(|d| d.get_i64("_id") == Ok(4_242))
+        .expect("doc 4242 restored");
+    assert_eq!(one.get_str("email").unwrap(), "u4242@x.com");
+
+    m.drop_database(&db).unwrap();
+}
+
+// The driver's insert_many surfaces per-document failures (index + code) so
+// error exclusions can tolerate them; unordered attempts every document.
+#[test]
+fn insert_many_reports_indexed_failures() {
+    let m = connect();
+    let db = db_name("bulk");
+    m.insert(&db, "users", &user(1, "a@x.com")).unwrap();
+
+    let batch = vec![user(0, "z@x.com"), user(1, "dup@x.com"), user(2, "b@x.com")];
+
+    // Unordered: both non-duplicates go in; the duplicate is reported with its
+    // batch index and code 11000.
+    let out = m.insert_many(&db, "users", &batch, false).unwrap();
+    assert_eq!(out.inserted, 2);
+    assert_eq!(out.failures.len(), 1);
+    let (idx, err) = &out.failures[0];
+    assert_eq!(*idx, 1);
+    assert_eq!(err.code, Some(11000));
+    assert_eq!(err.index_name.as_deref(), Some("_id_"));
+
+    m.drop_database(&db).unwrap();
+
+    // Ordered: the batch stops at the duplicate; the document after it is not
+    // attempted.
+    let m2 = connect();
+    let db2 = db_name("bulk_ord");
+    m2.insert(&db2, "users", &user(1, "a@x.com")).unwrap();
+    let out = m2.insert_many(&db2, "users", &batch, true).unwrap();
+    assert_eq!(out.inserted, 1);
+    assert_eq!(out.failures.len(), 1);
+    assert_eq!(out.failures[0].0, 1);
+    assert_eq!(
+        m2.read_collection(&db2, "users").unwrap().documents.len(),
+        2 // the pre-existing doc + batch[0]
+    );
+    m2.drop_database(&db2).unwrap();
+}
+
+// validate --data must fetch only the sampled documents, with the limit pushed
+// down to the server.
+#[test]
+fn read_sample_limits_fetched_documents() {
+    let m = connect();
+    let db = db_name("sample");
+    for i in 0..50i64 {
+        m.insert(&db, "events", &doc! { "_id": i }).unwrap();
+    }
+    let sample = m.read_sample(&db, "events", 7).unwrap();
+    assert_eq!(sample.len(), 7);
+    m.drop_database(&db).unwrap();
+}
+
+// subset_conds must actually narrow what's fetched from MongoDB, not just what
+// ends up in the dump file — otherwise a filter on a huge collection still
+// pulls every document into memory before discarding most of them. This drives
+// the real driver's find() with a translated filter and checks both the raw
+// read and a full Dump only see the matching documents.
+#[test]
+fn subset_filter_pushes_down_to_mongo_query() {
+    use leafmask::transform::condition::Condition;
+
+    let m = connect();
+    let db = db_name("filter");
+    for i in 1..=5i64 {
+        m.insert(&db, "events", &doc! { "_id": i, "value": i })
+            .unwrap();
+    }
+
+    let filter = Condition::parse("value >= 3").unwrap().to_filter();
+
+    // Low-level: the driver itself only returns matching documents.
+    let filtered = m
+        .read_collection_filtered(&db, "events", Some(&filter))
+        .unwrap();
+    let mut values: Vec<i64> = filtered
+        .documents
+        .iter()
+        .map(|d| d.get_i64("value").unwrap())
+        .collect();
+    values.sort();
+    assert_eq!(values, vec![3, 4, 5]);
+
+    // End-to-end: a Dump with this filter set for the collection only dumps
+    // the matching documents, exactly like `subset_conds` should.
+    let dir = tempfile::tempdir().unwrap();
+    let storage = DirectoryStorage::new(dir.path()).unwrap();
+    let registry = Registry::with_builtins();
+    let engine = HashEngine::new("salt");
+    let mut filters = BTreeMap::new();
+    filters.insert("events".to_string(), filter);
+
+    let meta = Dump {
+        storage: &storage,
+        source: &m,
+        registry: &registry,
+        engine: &engine,
+        plan: None,
+        filters,
+        options: DumpOptions {
+            tmp_dir: Some(dir.path().display().to_string()),
+            include_databases: vec![db.clone()],
+            ..Default::default()
+        },
+    }
+    .run(chrono::Utc::now())
+    .unwrap();
+
+    let full = read_collection_full(&storage, &meta.id, &db, "events").unwrap();
+    assert_eq!(full.documents.len(), 3);
+
+    m.drop_database(&db).unwrap();
 }

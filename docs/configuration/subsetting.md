@@ -11,11 +11,14 @@ relational engine treats foreign keys.
 
 !!! info "Status"
     The subsetting engine — reference graph traversal, cycle handling,
-    polymorphic resolution — is implemented and covered by tests. Per-collection
-    document filtering is available today in `dump` via a collection
-    [`query`](transformations.md#restricting-documents). Wiring the full
-    multi-collection reference-following into the `dump` command is on the
-    near-term roadmap; this page documents the model and config shape it uses.
+    polymorphic resolution — is implemented and covered by tests, but wiring
+    the full multi-collection reference-following into the `dump` command is
+    still on the roadmap; this page documents the model and config shape it
+    uses. What *is* wired into `dump` today: `subset_conds` and a collection's
+    [`query`](transformations.md#restricting-documents) are both pushed down
+    to MongoDB as a real server-side filter, so only matching documents are
+    fetched — declaring one of them narrows what a collection dumps, it just
+    doesn't (yet) pull in documents from other collections it references.
 
 ## Virtual references
 
@@ -42,21 +45,32 @@ virtual_references:
 
 ## Filtering with `subset_conds`
 
-Attach a condition to a collection to seed the subset with only the documents you
-want. Everything reachable from them through declared references is included
-automatically — even collections you didn't filter.
+Attach a condition to a collection to dump only the documents you want. It goes
+under `dump:`, alongside `transformation`:
 
 ```yaml
-subset_conds:
-  orders: "region == 'EU'"
+dump:
+  subset_conds:
+    orders: "region == 'EU'"
 ```
 
-Given the `orders → users` reference above, dumping with this condition includes
-**only EU orders** plus **exactly the users those orders reference**, even though
-`users` has no filter of its own.
+The condition is translated into a native MongoDB filter and passed to `find()`
+— it narrows what's fetched from `orders` itself. Once multi-collection
+reference-following is wired in, dumping with this condition will also pull in
+**exactly the users those EU orders reference**, even though `users` has no
+filter of its own; today only the `orders` side of that is live.
 
 The condition uses the same [expression
-language](transformations.md#conditional-transformation) as `when`.
+language](transformations.md#conditional-transformation) as `when` — field
+comparisons (`== != > < >= <=`) and `and`/`or`. A quoted value that parses as
+an RFC3339 timestamp (e.g. `"2026-07-17T00:00:00Z"`) is compared as a real
+datetime, so date-range conditions work against a `datetime` field:
+
+```yaml
+dump:
+  subset_conds:
+    residence_temperature: "created_at >= '2026-07-17T00:00:00Z' and created_at < '2026-07-18T00:00:00Z'"
+```
 
 ## Cyclic references
 

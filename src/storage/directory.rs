@@ -99,6 +99,32 @@ impl Storage for DirectoryStorage {
         Ok(self.resolve(path).exists())
     }
 
+    fn put_file(&self, path: &str, local: &Path) -> Result<()> {
+        let full = self.resolve(path);
+        if let Some(parent) = full.parent() {
+            fs::create_dir_all(parent).map_err(|e| Error::Storage(e.to_string()))?;
+        }
+        // Same filesystem: a rename is instant and copies nothing. Across
+        // filesystems (tmp_dir on another mount) fall back to a streamed copy.
+        if fs::rename(local, &full).is_ok() {
+            return Ok(());
+        }
+        fs::copy(local, &full)
+            .map(|_| ())
+            .map_err(|e| Error::Storage(e.to_string()))
+    }
+
+    fn get_reader(&self, path: &str) -> Result<Box<dyn std::io::Read + Send>> {
+        let full = self.resolve(path);
+        match fs::File::open(&full) {
+            Ok(f) => Ok(Box::new(std::io::BufReader::new(f))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(Error::NotFound(format!("blob '{path}' not found")))
+            }
+            Err(e) => Err(Error::Storage(e.to_string())),
+        }
+    }
+
     fn delete(&self, prefix: &str) -> Result<()> {
         let full = self.resolve(prefix);
         if full.is_dir() {

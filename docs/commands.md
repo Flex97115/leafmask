@@ -48,7 +48,12 @@ An unknown name fails with a clear "not found" error.
 ### `dump`
 
 Create a logical dump of the configured MongoDB into the configured storage.
-Transformations and per-collection query filters are applied while streaming.
+Documents are streamed from a server-side cursor, transformed inline, and
+spooled to `common.tmp_dir` before upload — memory stays bounded per document,
+never per collection, so multi-gigabyte / 10M+ document collections dump fine.
+Each collection is stored as a plain concatenation of BSON documents
+(`mongodump`-style framing) plus a small structure blob (indexes, validator,
+options).
 
 ```sh
 leafmask --config leafmask.yaml dump --include-db shop --gzip
@@ -124,10 +129,16 @@ leafmask --config leafmask.yaml restore latest --dependency-order
 | `--exclude-collection <name>` | | skip these collections (repeatable) |
 | `--include-index <name>` | | restrict to these indexes (repeatable) |
 | `--exclude-index <name>` | | skip these indexes (repeatable) |
-| `--batch-size <n>` | `1000` | documents per bulk-insert batch |
-| `--ordered` | off | use ordered bulk writes |
+| `--batch-size <n>` | `1000` | documents per bulk-insert batch (one server round-trip per batch) |
+| `--ordered` | off | use ordered bulk writes (stop each batch at its first error) |
 | `--dependency-order` | off | create indexes/validators after documents |
 | `--exit-on-error` | off | abort the whole restore on a non-excluded error |
+
+Documents are streamed out of the dump and bulk-inserted `--batch-size` at a
+time, so memory stays flat however large the collection is. A non-excluded
+insert error fails that collection and the restore moves on to the next one
+(the command then exits non-zero listing the failed collections); with
+`--exit-on-error` it aborts everything immediately.
 
 Each `--include-*`/`--exclude-*` flag falls back to a YAML list in the
 [`restore`](configuration/restore.md#filtering) config section when omitted;

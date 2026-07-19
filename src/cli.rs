@@ -428,6 +428,7 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
         } else {
             Some(&plan)
         },
+        filters: std::collections::BTreeMap::new(),
         options,
     };
     let meta = dump.run(chrono::Utc::now())?;

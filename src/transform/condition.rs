@@ -36,6 +36,13 @@ impl Condition {
     pub fn eval(&self, doc: &Document) -> bool {
         eval_or(&self.expr, doc)
     }
+
+    /// Translate this condition into a native MongoDB filter document, for
+    /// server-side pushdown (e.g. `subset_conds` on a real dump) instead of
+    /// fetching every document and evaluating [`Self::eval`] in Rust.
+    pub fn to_filter(&self) -> Document {
+        filter_or(&self.expr)
+    }
 }
 
 fn eval_or(expr: &str, doc: &Document) -> bool {
@@ -97,6 +104,105 @@ fn eval_term(term: &str, doc: &Document) -> bool {
     truthy(get_path(doc, term.trim()))
 }
 
+fn filter_or(expr: &str) -> Document {
+    let mut parts: Vec<Document> = split_top(expr, " or ")
+        .iter()
+        .map(|c| filter_and(c))
+        .collect();
+    if parts.len() == 1 {
+        return parts.remove(0);
+    }
+    let mut d = Document::new();
+    d.insert(
+        "$or",
+        parts.into_iter().map(Bson::Document).collect::<Vec<_>>(),
+    );
+    d
+}
+
+fn filter_and(expr: &str) -> Document {
+    let mut parts: Vec<Document> = split_top(expr, " and ")
+        .iter()
+        .map(|c| filter_term(c.trim()))
+        .collect();
+    if parts.len() == 1 {
+        return parts.remove(0);
+    }
+    let mut d = Document::new();
+    d.insert(
+        "$and",
+        parts.into_iter().map(Bson::Document).collect::<Vec<_>>(),
+    );
+    d
+}
+
+fn filter_term(term: &str) -> Document {
+    for op in ["==", "!=", ">=", "<=", ">", "<"] {
+        if let Some(idx) = find_op(term, op) {
+            let lhs = term[..idx].trim();
+            let rhs = term[idx + op.len()..].trim();
+            return filter_compare(lhs, op, rhs);
+        }
+    }
+    // bare field -> truthiness: present, and not one of the "falsy" values.
+    let mut cond = Document::new();
+    cond.insert("$exists", true);
+    cond.insert(
+        "$nin",
+        vec![
+            Bson::Null,
+            Bson::Boolean(false),
+            Bson::Int32(0),
+            Bson::String(String::new()),
+        ],
+    );
+    let mut d = Document::new();
+    d.insert(term.trim(), cond);
+    d
+}
+
+fn filter_compare(lhs: &str, op: &str, rhs: &str) -> Document {
+    let value = literal_to_filter_bson(rhs);
+    let mut d = Document::new();
+    match op {
+        "==" => {
+            d.insert(lhs, value);
+        }
+        "!=" => {
+            let mut inner = Document::new();
+            inner.insert("$ne", value);
+            d.insert(lhs, inner);
+        }
+        ">" | "<" | ">=" | "<=" => {
+            let mongo_op = match op {
+                ">" => "$gt",
+                "<" => "$lt",
+                ">=" => "$gte",
+                _ => "$lte",
+            };
+            let mut inner = Document::new();
+            inner.insert(mongo_op, value);
+            d.insert(lhs, inner);
+        }
+        _ => unreachable!("filter_term only dispatches known comparison operators"),
+    }
+    d
+}
+
+/// Like [`parse_literal`], but a quoted value that parses as RFC3339 becomes a
+/// real BSON datetime, so a range comparison against a `Bson::DateTime` field
+/// matches server-side (mirrors the coercion `eval_compare` does via
+/// `as_millis` for the in-memory evaluator).
+fn literal_to_filter_bson(s: &str) -> Bson {
+    match parse_literal(s) {
+        Bson::String(text) => match bson::DateTime::parse_rfc3339_str(&text) {
+            Ok(dt) => Bson::DateTime(dt),
+            Err(_) => Bson::String(text),
+        },
+        other => other,
+    }
+}
+
 /// Find `op` at the top level (outside quotes).
 fn find_op(term: &str, op: &str) -> Option<usize> {
     let bytes: Vec<char> = term.chars().collect();
@@ -128,16 +234,36 @@ fn eval_compare(lhs: &str, op: &str, rhs: &str, doc: &Document) -> bool {
     match op {
         "==" => bson_eq(&left, &right),
         "!=" => !bson_eq(&left, &right),
-        _ => match (as_f64(&left), as_f64(&right)) {
-            (Some(a), Some(b)) => match op {
-                ">" => a > b,
-                "<" => a < b,
-                ">=" => a >= b,
-                "<=" => a <= b,
-                _ => false,
-            },
-            _ => false,
-        },
+        _ => {
+            let nums = as_f64(&left).zip(as_f64(&right)).or_else(|| {
+                as_millis(&left)
+                    .zip(as_millis(&right))
+                    .map(|(a, b)| (a as f64, b as f64))
+            });
+            match nums {
+                Some((a, b)) => match op {
+                    ">" => a > b,
+                    "<" => a < b,
+                    ">=" => a >= b,
+                    "<=" => a <= b,
+                    _ => false,
+                },
+                None => false,
+            }
+        }
+    }
+}
+
+/// Coerce a BSON datetime, or a string parseable as RFC3339, to epoch millis.
+/// Lets `created_at >= '2026-07-16T22:00:00Z'`-style range conditions compare
+/// a document's real `Bson::DateTime` against a quoted literal.
+fn as_millis(b: &Bson) -> Option<i64> {
+    match b {
+        Bson::DateTime(dt) => Some(dt.timestamp_millis()),
+        Bson::String(s) => bson::DateTime::parse_rfc3339_str(s)
+            .ok()
+            .map(|dt| dt.timestamp_millis()),
+        _ => None,
     }
 }
 
@@ -172,6 +298,9 @@ fn as_f64(b: &Bson) -> Option<f64> {
 
 fn bson_eq(a: &Bson, b: &Bson) -> bool {
     if let (Some(x), Some(y)) = (as_f64(a), as_f64(b)) {
+        return x == y;
+    }
+    if let (Some(x), Some(y)) = (as_millis(a), as_millis(b)) {
         return x == y;
     }
     a == b
@@ -250,6 +379,25 @@ mod tests {
         ])));
     }
 
+    // Acceptance: a datetime field can be range-filtered against RFC3339
+    // literals, e.g. for a subset_conds day-window condition.
+    #[test]
+    fn datetime_range_comparison() {
+        let c = Condition::parse(
+            "created_at >= '2026-07-17T00:00:00Z' and created_at < '2026-07-18T00:00:00Z'",
+        )
+        .unwrap();
+        let in_range =
+            Bson::DateTime(bson::DateTime::parse_rfc3339_str("2026-07-17T12:00:00Z").unwrap());
+        let before =
+            Bson::DateTime(bson::DateTime::parse_rfc3339_str("2026-07-16T23:59:59Z").unwrap());
+        let after =
+            Bson::DateTime(bson::DateTime::parse_rfc3339_str("2026-07-18T00:00:00Z").unwrap());
+        assert!(c.eval(&doc(&[("created_at", in_range)])));
+        assert!(!c.eval(&doc(&[("created_at", before)])));
+        assert!(!c.eval(&doc(&[("created_at", after)])));
+    }
+
     // Acceptance: a collection-level `when` can skip the whole document — same
     // evaluation, used by the caller to bypass transformation entirely.
     #[test]
@@ -264,5 +412,54 @@ mod tests {
         assert!(!c.eval(&doc(&[("flags", Bson::Document(inner))])));
 
         assert!(Condition::parse("").is_err());
+    }
+
+    // Acceptance: to_filter translates the same expression subset_conds uses
+    // into a native MongoDB filter, so a dump can push the condition down to
+    // the server instead of fetching the whole collection first.
+    #[test]
+    fn to_filter_translates_comparisons_and_boolean_composition() {
+        let c = Condition::parse("status == 'active'").unwrap();
+        let mut want = Document::new();
+        want.insert("status", "active");
+        assert_eq!(c.to_filter(), want);
+
+        let c = Condition::parse("age >= 18 and country == 'US'").unwrap();
+        let mut age_cond = Document::new();
+        age_cond.insert("$gte", 18i64);
+        let mut age_doc = Document::new();
+        age_doc.insert("age", age_cond);
+        let mut country_doc = Document::new();
+        country_doc.insert("country", "US");
+        let mut want = Document::new();
+        want.insert(
+            "$and",
+            vec![Bson::Document(age_doc), Bson::Document(country_doc)],
+        );
+        assert_eq!(c.to_filter(), want);
+    }
+
+    // Acceptance: a quoted RFC3339 literal becomes a real BSON datetime in the
+    // filter, so a range condition on a datetime field actually matches
+    // server-side (a plain string literal would never equal a Bson::DateTime).
+    #[test]
+    fn to_filter_coerces_rfc3339_literals_to_datetime() {
+        let c = Condition::parse(
+            "created_at >= '2026-07-17T00:00:00Z' and created_at < '2026-07-18T00:00:00Z'",
+        )
+        .unwrap();
+        let filter = c.to_filter();
+        let and = filter.get_array("$and").unwrap();
+        let lower = and[0]
+            .as_document()
+            .unwrap()
+            .get_document("created_at")
+            .unwrap();
+        assert_eq!(
+            lower.get("$gte"),
+            Some(&Bson::DateTime(
+                bson::DateTime::parse_rfc3339_str("2026-07-17T00:00:00Z").unwrap()
+            ))
+        );
     }
 }

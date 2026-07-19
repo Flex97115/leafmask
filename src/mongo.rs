@@ -27,11 +27,82 @@ pub struct CollectionData {
     pub options: BTreeMap<String, Bson>,
 }
 
+/// A collection's structure (everything but the documents).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CollectionStructure {
+    pub indexes: Vec<IndexSpec>,
+    pub validator: Option<Bson>,
+    pub options: BTreeMap<String, Bson>,
+}
+
 /// A read side: enumerate and read collections (for dump / validate).
 pub trait MongoSource {
-    fn databases(&self) -> Vec<String>;
-    fn collections(&self, database: &str) -> Vec<String>;
+    fn databases(&self) -> Result<Vec<String>>;
+    fn collections(&self, database: &str) -> Result<Vec<String>>;
     fn read_collection(&self, database: &str, collection: &str) -> Result<CollectionData>;
+
+    /// Like [`Self::read_collection`], but pushes `filter` down to the source
+    /// when it can (a real MongoDB query) instead of fetching every document
+    /// and filtering afterward. The default ignores `filter` and delegates.
+    fn read_collection_filtered(
+        &self,
+        database: &str,
+        collection: &str,
+        filter: Option<&Document>,
+    ) -> Result<CollectionData> {
+        let _ = filter;
+        self.read_collection(database, collection)
+    }
+
+    /// The collection's structure (indexes, validator, options) without its
+    /// documents. The default materializes the collection; real sources should
+    /// override to avoid reading any documents.
+    fn read_structure(&self, database: &str, collection: &str) -> Result<CollectionStructure> {
+        let data = self.read_collection(database, collection)?;
+        Ok(CollectionStructure {
+            indexes: data.indexes,
+            validator: data.validator,
+            options: data.options,
+        })
+    }
+
+    /// Stream the collection's documents (matching `filter` when the source
+    /// supports pushdown), invoking `f` once per document. This is the dump's
+    /// read path: memory stays bounded regardless of collection size. The
+    /// default materializes via [`Self::read_collection_filtered`].
+    fn stream_documents(
+        &self,
+        database: &str,
+        collection: &str,
+        filter: Option<&Document>,
+        f: &mut dyn FnMut(Document) -> Result<()>,
+    ) -> Result<()> {
+        for doc in self
+            .read_collection_filtered(database, collection, filter)?
+            .documents
+        {
+            f(doc)?;
+        }
+        Ok(())
+    }
+
+    /// Read at most `limit` documents (for previews). The default materializes
+    /// then truncates; real sources should push the limit down.
+    fn read_sample(&self, database: &str, collection: &str, limit: usize) -> Result<Vec<Document>> {
+        let mut docs = self.read_collection(database, collection)?.documents;
+        docs.truncate(limit);
+        Ok(docs)
+    }
+}
+
+/// Outcome of a batched insert: how many documents went in, and which failed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BatchInsert {
+    pub inserted: u64,
+    /// Failed documents as (index within the batch, error). With `ordered`
+    /// writes the batch stops at the first failure, so documents after that
+    /// index were not attempted.
+    pub failures: Vec<(usize, InsertError)>,
 }
 
 /// A write side: create collections/indexes and insert documents (for restore).
@@ -53,6 +124,34 @@ pub trait MongoSink {
         collection: &str,
         doc: &Document,
     ) -> std::result::Result<(), InsertError>;
+
+    /// Insert a batch of documents in one server round-trip where the backend
+    /// supports it — the restore hot path. `ordered` stops the batch at its
+    /// first failure; unordered attempts every document and reports all
+    /// failures. Per-document failures come back in the [`BatchInsert`] (they
+    /// are not an `Err`); `Err` is reserved for whole-batch failures like a
+    /// lost connection. The default falls back to per-document [`Self::insert`].
+    fn insert_many(
+        &self,
+        database: &str,
+        collection: &str,
+        docs: &[Document],
+        ordered: bool,
+    ) -> Result<BatchInsert> {
+        let mut out = BatchInsert::default();
+        for (i, doc) in docs.iter().enumerate() {
+            match self.insert(database, collection, doc) {
+                Ok(()) => out.inserted += 1,
+                Err(e) => {
+                    out.failures.push((i, e));
+                    if ordered {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
 
     /// Create an index on a collection.
     fn create_index(&self, database: &str, collection: &str, index: &IndexSpec) -> Result<()>;
@@ -91,7 +190,7 @@ impl InMemoryMongo {
 }
 
 impl MongoSource for InMemoryMongo {
-    fn databases(&self) -> Vec<String> {
+    fn databases(&self) -> Result<Vec<String>> {
         let mut dbs: Vec<String> = self
             .inner
             .lock()
@@ -101,10 +200,10 @@ impl MongoSource for InMemoryMongo {
             .collect();
         dbs.sort();
         dbs.dedup();
-        dbs
+        Ok(dbs)
     }
 
-    fn collections(&self, database: &str) -> Vec<String> {
+    fn collections(&self, database: &str) -> Result<Vec<String>> {
         let mut cols: Vec<String> = self
             .inner
             .lock()
@@ -114,7 +213,7 @@ impl MongoSource for InMemoryMongo {
             .map(|(_, c)| c.clone())
             .collect();
         cols.sort();
-        cols
+        Ok(cols)
     }
 
     fn read_collection(&self, database: &str, collection: &str) -> Result<CollectionData> {
@@ -237,16 +336,18 @@ mod driver {
     }
 
     impl MongoSource for MongoDriver {
-        fn databases(&self) -> Vec<String> {
-            self.rt
+        fn databases(&self) -> Result<Vec<String>> {
+            let names = self
+                .rt
                 .block_on(self.client.list_database_names().into_future())
-                .unwrap_or_default()
+                .map_err(|e| Error::Mongo(format!("listDatabases: {e}")))?;
+            Ok(names
                 .into_iter()
                 .filter(|d| !matches!(d.as_str(), "admin" | "config" | "local"))
-                .collect()
+                .collect())
         }
 
-        fn collections(&self, database: &str) -> Vec<String> {
+        fn collections(&self, database: &str) -> Result<Vec<String>> {
             self.rt
                 .block_on(
                     self.client
@@ -254,32 +355,39 @@ mod driver {
                         .list_collection_names()
                         .into_future(),
                 )
-                .unwrap_or_default()
+                .map_err(|e| Error::Mongo(format!("listCollections: {e}")))
         }
 
         fn read_collection(&self, database: &str, collection: &str) -> Result<CollectionData> {
+            self.read_collection_filtered(database, collection, None)
+        }
+
+        fn read_collection_filtered(
+            &self,
+            database: &str,
+            collection: &str,
+            filter: Option<&Document>,
+        ) -> Result<CollectionData> {
+            let structure = self.read_structure(database, collection)?;
+            let mut documents = Vec::new();
+            self.stream_documents(database, collection, filter, &mut |doc| {
+                documents.push(doc);
+                Ok(())
+            })?;
+            Ok(CollectionData {
+                database: database.to_string(),
+                collection: collection.to_string(),
+                documents,
+                indexes: structure.indexes,
+                validator: structure.validator,
+                options: structure.options,
+            })
+        }
+
+        fn read_structure(&self, database: &str, collection: &str) -> Result<CollectionStructure> {
             let db = self.client.database(database);
             let coll = self.coll(database, collection);
-
             self.rt.block_on(async {
-                // Documents.
-                let mut cursor = coll
-                    .find(Document::new())
-                    .await
-                    .map_err(|e| Error::Mongo(format!("find: {e}")))?;
-                let mut documents = Vec::new();
-                while cursor
-                    .advance()
-                    .await
-                    .map_err(|e| Error::Mongo(e.to_string()))?
-                {
-                    documents.push(
-                        cursor
-                            .deserialize_current()
-                            .map_err(|e| Error::Mongo(e.to_string()))?,
-                    );
-                }
-
                 // Indexes.
                 let mut indexes = Vec::new();
                 if let Ok(mut idx_cursor) = coll.list_indexes().await {
@@ -320,14 +428,72 @@ mod driver {
                 // Validator + collection options via listCollections.
                 let (validator, options) = read_options(&db, collection).await?;
 
-                Ok(CollectionData {
-                    database: database.to_string(),
-                    collection: collection.to_string(),
-                    documents,
+                Ok(CollectionStructure {
                     indexes,
                     validator,
                     options,
                 })
+            })
+        }
+
+        fn stream_documents(
+            &self,
+            database: &str,
+            collection: &str,
+            filter: Option<&Document>,
+            f: &mut dyn FnMut(Document) -> Result<()>,
+        ) -> Result<()> {
+            let coll = self.coll(database, collection);
+            let query_filter = filter.cloned().unwrap_or_default();
+            self.rt.block_on(async {
+                // `query_filter` is pushed to MongoDB directly (rather than
+                // fetching everything and filtering in Rust) so a narrow
+                // subset_conds/query doesn't require loading the whole
+                // collection; the cursor hands documents over one at a time.
+                let mut cursor = coll
+                    .find(query_filter)
+                    .await
+                    .map_err(|e| Error::Mongo(format!("find: {e}")))?;
+                while cursor
+                    .advance()
+                    .await
+                    .map_err(|e| Error::Mongo(e.to_string()))?
+                {
+                    let doc = cursor
+                        .deserialize_current()
+                        .map_err(|e| Error::Mongo(e.to_string()))?;
+                    f(doc)?;
+                }
+                Ok(())
+            })
+        }
+
+        fn read_sample(
+            &self,
+            database: &str,
+            collection: &str,
+            limit: usize,
+        ) -> Result<Vec<Document>> {
+            let coll = self.coll(database, collection);
+            self.rt.block_on(async {
+                let mut cursor = coll
+                    .find(Document::new())
+                    .limit(limit as i64)
+                    .await
+                    .map_err(|e| Error::Mongo(format!("find: {e}")))?;
+                let mut documents = Vec::new();
+                while cursor
+                    .advance()
+                    .await
+                    .map_err(|e| Error::Mongo(e.to_string()))?
+                {
+                    documents.push(
+                        cursor
+                            .deserialize_current()
+                            .map_err(|e| Error::Mongo(e.to_string()))?,
+                    );
+                }
+                Ok(documents)
             })
         }
     }
@@ -366,6 +532,62 @@ mod driver {
             match self.rt.block_on(coll.insert_one(doc.clone()).into_future()) {
                 Ok(_) => Ok(()),
                 Err(e) => Err(map_insert_error(&e)),
+            }
+        }
+
+        fn insert_many(
+            &self,
+            database: &str,
+            collection: &str,
+            docs: &[Document],
+            ordered: bool,
+        ) -> Result<BatchInsert> {
+            use mongodb::error::ErrorKind;
+
+            if docs.is_empty() {
+                return Ok(BatchInsert::default());
+            }
+            let coll = self.coll(database, collection);
+            match self.rt.block_on(
+                coll.insert_many(docs.to_vec())
+                    .ordered(ordered)
+                    .into_future(),
+            ) {
+                Ok(res) => Ok(BatchInsert {
+                    inserted: res.inserted_ids.len() as u64,
+                    failures: Vec::new(),
+                }),
+                Err(e) => match e.kind.as_ref() {
+                    ErrorKind::InsertMany(ime) if ime.write_errors.is_some() => {
+                        let failures: Vec<(usize, InsertError)> = ime
+                            .write_errors
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|we| {
+                                (
+                                    we.index,
+                                    InsertError {
+                                        code: Some(we.code),
+                                        index_name: index_name_from_message(&we.message),
+                                    },
+                                )
+                            })
+                            .collect();
+                        // Ordered writes stop at the first failure: everything
+                        // before it went in. Unordered attempts every document.
+                        let inserted = if ordered {
+                            failures.first().map(|(i, _)| *i).unwrap_or(0)
+                        } else {
+                            docs.len() - failures.len()
+                        };
+                        Ok(BatchInsert {
+                            inserted: inserted as u64,
+                            failures,
+                        })
+                    }
+                    _ => Err(Error::Mongo(format!("insert_many: {e}"))),
+                },
             }
         }
 
@@ -441,12 +663,18 @@ mod driver {
             ErrorKind::Write(WriteFailure::WriteError(we)) => (Some(we.code), we.message.clone()),
             other => (None, other.to_string()),
         };
-        // Extract the offending index name from an E11000 message when present.
-        let index_name = message
+        InsertError {
+            code,
+            index_name: index_name_from_message(&message),
+        }
+    }
+
+    /// Extract the offending index name from an E11000 message when present.
+    fn index_name_from_message(message: &str) -> Option<String> {
+        message
             .split("index:")
             .nth(1)
             .and_then(|s| s.split_whitespace().next())
-            .map(|s| s.to_string());
-        InsertError { code, index_name }
+            .map(|s| s.to_string())
     }
 }

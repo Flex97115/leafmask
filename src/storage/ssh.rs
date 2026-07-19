@@ -165,6 +165,45 @@ mod imp {
             })
         }
 
+        fn put_file(&self, path: &str, local: &Path) -> Result<()> {
+            let remote = self.cfg.remote_path(path);
+            self.with_session(|sess| {
+                let sftp = sess.sftp().map_err(|e| Error::Storage(e.to_string()))?;
+                if let Some(parent) = Path::new(&remote).parent() {
+                    let mut acc = std::path::PathBuf::new();
+                    for comp in parent.components() {
+                        acc.push(comp);
+                        let _ = sftp.mkdir(&acc, 0o755);
+                    }
+                }
+                let mut src =
+                    std::fs::File::open(local).map_err(|e| Error::Storage(e.to_string()))?;
+                let mut dst = sftp
+                    .create(Path::new(&remote))
+                    .map_err(|e| Error::Storage(e.to_string()))?;
+                // Streamed copy: bounded memory however large the blob is.
+                std::io::copy(&mut src, &mut dst).map_err(|e| Error::Storage(e.to_string()))?;
+                Ok(())
+            })
+        }
+
+        fn get_reader(&self, path: &str) -> Result<Box<dyn std::io::Read + Send>> {
+            let remote = self.cfg.remote_path(path);
+            // The SFTP file handle is tied to the session behind the mutex, so
+            // spool the download to local disk and stream from there.
+            let (mut spool_file, spool) = crate::storage::download_spool()?;
+            self.with_session(|sess| {
+                let sftp = sess.sftp().map_err(|e| Error::Storage(e.to_string()))?;
+                let mut src = sftp
+                    .open(Path::new(&remote))
+                    .map_err(|_| Error::NotFound(format!("blob '{path}' not found")))?;
+                std::io::copy(&mut src, &mut spool_file)
+                    .map_err(|e| Error::Storage(e.to_string()))?;
+                Ok(())
+            })?;
+            crate::storage::open_and_remove_spool(&spool)
+        }
+
         fn delete(&self, prefix: &str) -> Result<()> {
             for rel in self.list(prefix)? {
                 let remote = self.cfg.remote_path(&rel);
@@ -204,9 +243,18 @@ mod imp {
         }
 
         fn size(&self, prefix: &str) -> Result<u64> {
+            // stat, not download: sizing a dump must not transfer it.
             let mut total = 0u64;
             for rel in self.list(prefix)? {
-                total += self.get(&rel)?.len() as u64;
+                let remote = self.cfg.remote_path(&rel);
+                total += self.with_session(|sess| {
+                    let sftp = sess.sftp().map_err(|e| Error::Storage(e.to_string()))?;
+                    Ok(sftp
+                        .stat(Path::new(&remote))
+                        .map_err(|e| Error::Storage(e.to_string()))?
+                        .size
+                        .unwrap_or(0))
+                })?;
             }
             Ok(total)
         }

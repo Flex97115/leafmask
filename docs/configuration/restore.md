@@ -35,7 +35,13 @@ restore:
 
 ## Tolerating insert errors
 
-By default any failed insert aborts the restore. Sometimes that's too strict —
+Documents are inserted in bulk batches (`--batch-size`, default 1000 — one
+server round-trip per batch, which is what makes restoring very large
+collections practical). By default a failed insert fails its **collection**:
+the collection is skipped from that point, the restore continues with the next
+one, and the command exits non-zero listing the failed collections. Pass
+[`--exit-on-error`](../commands.md#restore) to abort the whole restore at the
+first non-excluded error instead. Sometimes even that is too strict —
 for example a duplicate key you expect and want to skip. Declare exclusions by
 **error code** or **unique-index name**, globally or per collection:
 
@@ -59,8 +65,9 @@ restore:
 | `collections[].index_names` | index names tolerated for that collection |
 
 A matching insert error is **logged and skipped**, and the restore continues with
-the next document. An error that matches no exclusion still aborts the restore.
-The run's summary reports how many documents were `skipped`.
+the next document. An error that matches no exclusion fails the collection (or
+the whole restore with `--exit-on-error`). The run's summary reports how many
+documents were `skipped`.
 
 !!! tip "Duplicate keys"
     `E11000` is error code `11000`. If you re-restore into a non-empty target, or
