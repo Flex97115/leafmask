@@ -243,6 +243,27 @@ mod tests {
         assert_eq!(del, vec!["d1".to_string()]);
     }
 
+    // Foot-gun guard: `retain_recent: 0` protects zero dumps, so every completed
+    // dump is selected for deletion. This documents the (literal) "keep 0"
+    // semantics so the total-wipe behaviour cannot regress unnoticed.
+    #[test]
+    fn retain_recent_zero_selects_every_completed_dump() {
+        let dumps = vec![
+            meta("d1", DumpStatus::Done, "2026-01-01T00:00:00Z"),
+            meta("d2", DumpStatus::Done, "2026-01-02T00:00:00Z"),
+            meta("d3", DumpStatus::Done, "2026-01-03T00:00:00Z"),
+        ];
+        let policy = RetentionPolicy {
+            retain_recent: Some(0),
+            ..Default::default()
+        };
+        let del = select_for_deletion(&dumps, &policy, Utc::now());
+        assert_eq!(
+            del,
+            vec!["d1".to_string(), "d2".to_string(), "d3".to_string()]
+        );
+    }
+
     // Acceptance (delete): before-date / retain-for delete outside the window;
     // prune-failed removes failed dumps; dry-run deletes nothing.
     #[test]
