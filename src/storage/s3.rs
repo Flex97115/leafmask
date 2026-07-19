@@ -19,6 +19,7 @@ pub struct S3Config {
     pub prefix: String,
     pub access_key_id: Option<String>,
     pub secret_access_key: Option<String>,
+    pub force_path_style: Option<bool>,
 }
 
 impl S3Config {
@@ -33,6 +34,7 @@ impl S3Config {
             prefix: str_param(p, "prefix").unwrap_or_default(),
             access_key_id: str_param(p, "access_key_id"),
             secret_access_key: str_param(p, "secret_access_key"),
+            force_path_style: bool_param(p, "force_path_style"),
         })
     }
 
@@ -40,10 +42,20 @@ impl S3Config {
     pub fn object_key(&self, path: &str) -> String {
         join_key(&self.prefix, path)
     }
+
+    /// Whether the SDK should use path-style addressing. Explicit setting wins;
+    /// otherwise a custom endpoint implies path-style (MinIO & most compatibles).
+    pub fn path_style(&self) -> bool {
+        self.force_path_style.unwrap_or(self.endpoint.is_some())
+    }
 }
 
 fn str_param(p: &Params, key: &str) -> Option<String> {
     p.get(key).and_then(|v| v.as_str()).map(str::to_string)
+}
+
+fn bool_param(p: &Params, key: &str) -> Option<bool> {
+    p.get(key).and_then(|v| v.as_bool())
 }
 
 /// Join a key prefix and a relative path with a single `/`, tolerating leading
@@ -88,8 +100,20 @@ mod imp {
                 if let Some(e) = &cfg.endpoint {
                     loader = loader.endpoint_url(e.clone());
                 }
+                if let (Some(ak), Some(sk)) = (&cfg.access_key_id, &cfg.secret_access_key) {
+                    loader = loader.credentials_provider(aws_sdk_s3::config::Credentials::new(
+                        ak.clone(),
+                        sk.clone(),
+                        None,
+                        None,
+                        "leafmask-config",
+                    ));
+                }
                 let shared = loader.load().await;
-                Client::new(&shared)
+                let conf = aws_sdk_s3::config::Builder::from(&shared)
+                    .force_path_style(cfg.path_style())
+                    .build();
+                Client::from_conf(conf)
             });
             Ok(S3Storage { cfg, client, rt })
         }
@@ -347,5 +371,28 @@ mod tests {
     fn join_key_normalizes_slashes() {
         assert_eq!(join_key("/pre/", "/a/b"), "pre/a/b");
         assert_eq!(join_key("", "a/b"), "a/b");
+    }
+
+    // Custom endpoints default to path-style addressing (MinIO & friends);
+    // AWS-proper (no endpoint) keeps virtual-host style.
+    #[test]
+    fn path_style_defaults_follow_endpoint() {
+        let with_ep =
+            S3Config::from_params(&params("bucket: b\nendpoint: http://minio:9000\n")).unwrap();
+        assert!(with_ep.path_style());
+        let plain = S3Config::from_params(&params("bucket: b\n")).unwrap();
+        assert!(!plain.path_style());
+    }
+
+    // force_path_style overrides the default in both directions.
+    #[test]
+    fn force_path_style_overrides_default() {
+        let off = S3Config::from_params(&params(
+            "bucket: b\nendpoint: http://r2.example.com\nforce_path_style: false\n",
+        ))
+        .unwrap();
+        assert!(!off.path_style());
+        let on = S3Config::from_params(&params("bucket: b\nforce_path_style: true\n")).unwrap();
+        assert!(on.path_style());
     }
 }

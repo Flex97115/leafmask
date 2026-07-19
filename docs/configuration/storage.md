@@ -62,6 +62,7 @@ storage:
 | `prefix` | no | key prefix all dumps live under |
 | `access_key_id` | no | falls back to the standard AWS credential chain |
 | `secret_access_key` | no | falls back to the standard AWS credential chain |
+| `force_path_style` | no | `true`/`false` — path-style addressing. Defaults to `true` when `endpoint` is set (what MinIO and most S3-compatibles need), `false` otherwise. |
 
 === "AWS S3"
 
@@ -83,6 +84,8 @@ storage:
       access_key_id: ${MINIO_ROOT_USER}
       secret_access_key: ${MINIO_ROOT_PASSWORD}
     ```
+
+    Path-style addressing is automatic when `endpoint` is set — MinIO and most S3-compatibles require it. Config credentials (`access_key_id`/`secret_access_key`) take precedence over the standard AWS credential chain when present.
 
 ## Azure Blob
 
