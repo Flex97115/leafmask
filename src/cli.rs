@@ -103,6 +103,23 @@ pub struct ValidateArgs {
     pub strict: bool,
 }
 
+/// Flags for the `bench` command.
+#[derive(Debug, Args)]
+pub struct BenchArgs {
+    /// Document counts to actually run, comma-separated.
+    #[arg(long, default_value = "100000,1000000")]
+    pub sizes: String,
+    /// Document counts to extrapolate from the largest real run ("" for none).
+    #[arg(long, default_value = "10000000")]
+    pub estimate: String,
+    /// Print the results as a markdown table.
+    #[arg(long)]
+    pub markdown: bool,
+    /// Keep the bench database and dump directory (debug).
+    #[arg(long)]
+    pub keep: bool,
+}
+
 /// Top-level subcommands. Individual features flesh these out.
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -147,6 +164,8 @@ pub enum Command {
     Restore(RestoreArgs),
     /// Validate/preview transformations against live data (requires --features mongo).
     Validate(ValidateArgs),
+    /// Measure dump/restore throughput with synthetic data (requires --features mongo).
+    Bench(BenchArgs),
 }
 
 /// Load the config if one was provided (or discoverable via env).
@@ -384,6 +403,7 @@ pub fn run(cli: Cli) -> crate::Result<()> {
         Command::Dump(args) => cmd_dump(&cli, args),
         Command::Restore(args) => cmd_restore(&cli, args),
         Command::Validate(args) => cmd_validate(&cli, args),
+        Command::Bench(args) => cmd_bench(&cli, args),
     }
 }
 
@@ -410,6 +430,10 @@ fn cmd_restore(_cli: &Cli, _args: &RestoreArgs) -> crate::Result<()> {
 #[cfg(not(feature = "mongo"))]
 fn cmd_validate(_cli: &Cli, _args: &ValidateArgs) -> crate::Result<()> {
     mongo_unavailable("validate")
+}
+#[cfg(not(feature = "mongo"))]
+fn cmd_bench(_cli: &Cli, _args: &BenchArgs) -> crate::Result<()> {
+    mongo_unavailable("bench")
 }
 
 #[cfg(feature = "mongo")]
@@ -583,6 +607,52 @@ fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
         &opts,
     )?;
     print!("{out}");
+    Ok(())
+}
+
+#[cfg(feature = "mongo")]
+fn cmd_bench(cli: &Cli, args: &BenchArgs) -> crate::Result<()> {
+    use crate::bench::{extrapolate, parse_sizes, render_table, BenchOptions};
+
+    let sizes = parse_sizes(&args.sizes)?;
+    let estimates = if args.estimate.trim().is_empty() {
+        Vec::new()
+    } else {
+        parse_sizes(&args.estimate)?
+    };
+    // The bench does not need a config file: --uri (or LEAFMASK_MONGO_URI)
+    // alone is enough; mongodb.uri from a config is used when present.
+    let uri = cli
+        .uri
+        .clone()
+        .or_else(|| {
+            maybe_config(cli)
+                .ok()
+                .flatten()
+                .and_then(|c| c.mongodb.uri.clone())
+        })
+        .ok_or_else(|| {
+            crate::Error::Config("MongoDB URI required: pass --uri or set mongodb.uri".into())
+        })?;
+    let driver = crate::mongo::MongoDriver::connect(&uri)?;
+    let mut runs = crate::bench::run_bench(
+        &driver,
+        &BenchOptions {
+            sizes,
+            keep: args.keep,
+        },
+    )?;
+    if let Some(base) = runs
+        .iter()
+        .filter(|r| !r.estimated)
+        .max_by_key(|r| r.docs)
+        .cloned()
+    {
+        for target in estimates {
+            runs.push(extrapolate(&base, target));
+        }
+    }
+    print!("{}", render_table(&runs, args.markdown));
     Ok(())
 }
 

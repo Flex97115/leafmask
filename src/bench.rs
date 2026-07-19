@@ -169,6 +169,156 @@ pub fn render_table(runs: &[BenchRun], markdown: bool) -> String {
     }
 }
 
+#[cfg(feature = "mongo")]
+pub use exec::{run_bench, BenchOptions};
+
+#[cfg(feature = "mongo")]
+mod exec {
+    use std::collections::BTreeMap;
+    use std::time::Instant;
+
+    use super::*;
+    use crate::dump::{Dump, DumpOptions};
+    use crate::hash::HashEngine;
+    use crate::mongo::{MongoDriver, MongoSink, MongoSource};
+    use crate::restore::{Restore, RestoreOptions, ScriptRunner};
+    use crate::storage::DirectoryStorage;
+    use crate::transform::Registry;
+
+    /// The fixed database the bench owns. Guarded by a marker collection so we
+    /// never wipe a database we did not create.
+    pub const BENCH_DB: &str = "leafmask_bench";
+    const MARKER: &str = "leafmask_bench_marker";
+    const COLLECTION: &str = "clients";
+    const SEED_BATCH: usize = 1_000;
+
+    pub struct BenchOptions {
+        pub sizes: Vec<u64>,
+        /// Leave the bench database and dump directory in place (debug).
+        pub keep: bool,
+    }
+
+    /// Scripts are always empty in a bench; nothing to run.
+    struct NoScripts;
+    impl ScriptRunner for NoScripts {
+        fn run_mongosh(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn run_mongosh_file(&self, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn run_command(&self, _: &[String]) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    pub fn run_bench(driver: &MongoDriver, opts: &BenchOptions) -> Result<Vec<BenchRun>> {
+        guard_bench_db(driver)?;
+        opts.sizes
+            .iter()
+            .map(|&n| bench_one(driver, n, opts.keep))
+            .collect()
+    }
+
+    /// Refuse to touch `leafmask_bench` unless it is empty or carries the
+    /// marker collection of a previous (possibly interrupted) bench.
+    fn guard_bench_db(driver: &MongoDriver) -> Result<()> {
+        if driver.databases()?.iter().any(|d| d == BENCH_DB) {
+            let colls = driver.collections(BENCH_DB)?;
+            if !colls.is_empty() && !colls.iter().any(|c| c == MARKER) {
+                return Err(Error::Config(format!(
+                    "database '{BENCH_DB}' exists and was not created by leafmask bench; \
+                     drop it manually or run the bench against another deployment"
+                )));
+            }
+            driver.drop_database(BENCH_DB)?;
+        }
+        Ok(())
+    }
+
+    fn bench_one(driver: &MongoDriver, n: u64, keep: bool) -> Result<BenchRun> {
+        log::info!("bench: seeding {n} documents into {BENCH_DB}.{COLLECTION}");
+        driver.ensure_collection(BENCH_DB, MARKER, &None, &BTreeMap::new())?;
+        driver.ensure_collection(BENCH_DB, COLLECTION, &None, &BTreeMap::new())?;
+        let mut batch = Vec::with_capacity(SEED_BATCH);
+        for i in 0..n {
+            batch.push(client_doc(i));
+            if batch.len() == SEED_BATCH {
+                driver.insert_many(BENCH_DB, COLLECTION, &batch, false)?;
+                batch.clear();
+            }
+        }
+        if !batch.is_empty() {
+            driver.insert_many(BENCH_DB, COLLECTION, &batch, false)?;
+        }
+
+        // Isolated work area: dump storage + spool dir, cleaned up afterwards.
+        let root = std::env::temp_dir().join(format!("leafmask-bench-{}-{n}", std::process::id()));
+        let store_dir = root.join("storage");
+        let tmp_dir = root.join("tmp");
+        std::fs::create_dir_all(&store_dir)
+            .and_then(|()| std::fs::create_dir_all(&tmp_dir))
+            .map_err(|e| Error::Storage(format!("cannot create bench work dir: {e}")))?;
+        let storage = DirectoryStorage::new(&store_dir)?;
+        let registry = Registry::with_builtins();
+        let engine = HashEngine::new("bench");
+
+        let dump = Dump {
+            storage: &storage,
+            source: driver,
+            registry: &registry,
+            engine: &engine,
+            plan: None,
+            filters: BTreeMap::new(),
+            options: DumpOptions {
+                tmp_dir: Some(tmp_dir.display().to_string()),
+                include_databases: vec![BENCH_DB.into()],
+                include_collections: vec![COLLECTION.into()],
+                gzip: true,
+                ..Default::default()
+            },
+        };
+        let t = Instant::now();
+        let meta = dump.run(chrono::Utc::now())?;
+        let dump_secs = t.elapsed().as_secs_f64();
+
+        // Restore into an empty database of the same name (restore keeps the
+        // dumped database name; no remapping exists).
+        driver.drop_database(BENCH_DB)?;
+        let restore = Restore {
+            storage: &storage,
+            sink: driver,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: SEED_BATCH,
+                ..Default::default()
+            },
+        };
+        let t = Instant::now();
+        let report = restore.run(&meta.id, &NoScripts)?;
+        let restore_secs = t.elapsed().as_secs_f64();
+        if report.inserted != n {
+            return Err(Error::Restore(format!(
+                "bench restore inserted {} of {n} documents",
+                report.inserted
+            )));
+        }
+
+        if !keep {
+            driver.drop_database(BENCH_DB)?;
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        Ok(BenchRun {
+            docs: n,
+            dump_secs,
+            restore_secs,
+            dump_bytes: meta.size,
+            estimated: false,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
