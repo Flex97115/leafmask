@@ -173,8 +173,13 @@ where
                 }
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // Copy the whole UTF-8 character starting at byte `i` — never a lone
+        // byte, which would corrupt any multibyte character into mojibake.
+        // `${`, `}` and env-name bytes are all ASCII, so scanning on bytes
+        // above stays correct.
+        let ch = raw[i..].chars().next().expect("i is a char boundary");
+        out.push(ch);
+        i += ch.len_utf8();
     }
     out
 }
@@ -245,6 +250,27 @@ mod tests {
         // Undefined variable expands to empty, does not blow up.
         assert_eq!(interpolate_env("${MISSING}/x", |_| None), "/x");
         assert_eq!(interpolate_env("a $ b {c}", |_| None), "a $ b {c}");
+    }
+
+    // Non-ASCII bytes in the file must survive interpolation untouched: a config
+    // value such as a password or path with accented/multibyte characters must
+    // not be mangled into mojibake.
+    #[test]
+    fn interpolation_preserves_non_ascii() {
+        assert_eq!(
+            interpolate_env("café ☕ ${X}", |_| Some("naïve".into())),
+            "café ☕ naïve"
+        );
+        // Multibyte characters immediately around a placeholder.
+        assert_eq!(interpolate_env("é${X}é", |_| None), "éé");
+        // A whole config value round-trips through the loader unchanged.
+        let mut env = BTreeMap::new();
+        env.insert("PW".to_string(), "pÀsswörd".to_string());
+        let cfg = load_str_with_env("mongodb:\n  uri: mongodb://user:${PW}@h\n", &env).unwrap();
+        assert_eq!(
+            cfg.mongodb.uri.as_deref(),
+            Some("mongodb://user:pÀsswörd@h")
+        );
     }
 
     // Acceptance: an unknown key is rejected as an error.
