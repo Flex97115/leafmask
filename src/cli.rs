@@ -414,14 +414,31 @@ fn cmd_validate(_cli: &Cli, _args: &ValidateArgs) -> crate::Result<()> {
 
 #[cfg(feature = "mongo")]
 fn engine_from(config: &crate::config::Config) -> crate::hash::HashEngine {
-    let (salt, is_default) = config.common.resolve_salt();
-    if is_default {
+    crate::hash::HashEngine::new(config.common.resolve_salt().0)
+}
+
+/// Whether to warn that anonymization is running with the public default salt.
+/// The warning is only meaningful when transformations are actually configured:
+/// a plain dump/preview with none is unaffected by the salt, so warning there
+/// would be noise. Pure so it is unit-testable without spawning MongoDB.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn should_warn_default_salt(
+    config: &crate::config::Config,
+    transformations_configured: bool,
+) -> bool {
+    transformations_configured && config.common.resolve_salt().1
+}
+
+/// Emit the default-salt warning when [`should_warn_default_salt`] holds.
+#[cfg(feature = "mongo")]
+fn warn_if_default_salt(config: &crate::config::Config, transformations_configured: bool) {
+    if should_warn_default_salt(config, transformations_configured) {
         log::warn!(
-            "common.salt is not set: using the built-in default salt, which is public and makes \
-             deterministic anonymization reversible. Set common.salt to a private value."
+            "common.salt is not set: transformations are running with the built-in default salt, \
+             which is public and makes deterministic anonymization reversible. Set common.salt to \
+             a private value."
         );
     }
-    crate::hash::HashEngine::new(salt)
 }
 
 #[cfg(feature = "mongo")]
@@ -436,6 +453,7 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
     let engine = engine_from(&config);
 
     let configs = transformation_configs(&config)?;
+    warn_if_default_salt(&config, !configs.is_empty());
     let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
 
     let (cfg_include_db, cfg_exclude_db, cfg_include_coll, cfg_exclude_coll) =
@@ -541,6 +559,7 @@ fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
     let registry = crate::catalog::build_registry(Some(&config))?;
     let engine = engine_from(&config);
     let configs = transformation_configs(&config)?;
+    warn_if_default_salt(&config, !configs.is_empty());
     let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
 
     let docs = driver
@@ -575,6 +594,30 @@ mod tests {
     fn resolve_list_falls_back_to_config_when_cli_is_empty() {
         let result = resolve_list(vec![], vec!["a".to_string(), "b".to_string()]);
         assert_eq!(result, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    // The default-salt warning must fire only when transformations are actually
+    // configured: a plain dump with none and no salt must NOT warn.
+    #[test]
+    fn default_salt_warning_is_gated_on_transformations() {
+        use crate::config::Config;
+
+        // No salt, transformations configured -> warn.
+        let no_salt = Config::default();
+        assert!(should_warn_default_salt(&no_salt, true));
+        // No salt, but no transformations -> silent (the salt is irrelevant).
+        assert!(!should_warn_default_salt(&no_salt, false));
+
+        // Explicit salt -> never warn, transformations or not.
+        let salted = Config {
+            common: crate::config::Common {
+                salt: Some("pepper".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(!should_warn_default_salt(&salted, true));
+        assert!(!should_warn_default_salt(&salted, false));
     }
 
     #[test]
