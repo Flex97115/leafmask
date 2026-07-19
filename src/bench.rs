@@ -124,12 +124,17 @@ pub fn render_table(runs: &[BenchRun], markdown: bool) -> String {
         } else {
             group_thousands(r.docs)
         };
+        let docs_per_sec = if r.dump_secs <= 0.0 {
+            "n/a".to_string()
+        } else {
+            group_thousands((r.docs as f64 / r.dump_secs) as u64)
+        };
         rows.push([
             docs,
             fmt_secs(r.dump_secs),
             fmt_secs(r.restore_secs),
             fmt_bytes(r.dump_bytes),
-            group_thousands((r.docs as f64 / r.dump_secs.max(f64::EPSILON)) as u64),
+            docs_per_sec,
         ]);
     }
     let header = ["Documents", "Dump", "Restore", "Dump size", "Docs/s (dump)"];
@@ -232,5 +237,20 @@ mod tests {
         assert!(md.contains("10,000,000 *(estimated)*"));
         let txt = render_table(&runs, false);
         assert!(txt.contains("estimated"));
+    }
+
+    #[test]
+    fn render_table_shows_n_a_for_zero_duration() {
+        let runs = vec![BenchRun {
+            docs: 1_000,
+            dump_secs: 0.0,
+            restore_secs: 5.0,
+            dump_bytes: 10_000,
+            estimated: false,
+        }];
+        let md = render_table(&runs, true);
+        assert!(md.contains("n/a"));
+        let txt = render_table(&runs, false);
+        assert!(txt.contains("n/a"));
     }
 }
