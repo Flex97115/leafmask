@@ -64,6 +64,27 @@ leafmask --config leafmask.yaml dump --include-db shop --gzip
 | `--no-indexes` | exclude index definitions and collection options |
 | `--jobs <n>` | number of parallel jobs (accepted; runs sequentially) |
 
+Each `--include-*`/`--exclude-*` flag falls back to a YAML list under `dump:`
+when omitted (or passed with no values) — useful once there are too many
+databases/collections to spell out on the command line. A non-empty flag on
+the command line overrides the matching YAML list entirely (same precedence
+as `--uri` overriding `mongodb.uri`):
+
+```yaml
+dump:
+  include_databases: [shop, billing]
+  exclude_databases: [logs]
+  include_collections: [users, orders]
+  exclude_collections: [sessions]
+```
+
+| Flag | Config fallback |
+| --- | --- |
+| `--include-db` | `dump.include_databases` |
+| `--exclude-db` | `dump.exclude_databases` |
+| `--include-collection` | `dump.include_collections` |
+| `--exclude-collection` | `dump.exclude_collections` |
+
 Requires `common.tmp_dir`; without it the dump fails fast. Prints the new dump
 id.
 
@@ -108,9 +129,14 @@ leafmask --config leafmask.yaml restore latest --dependency-order
 | `--dependency-order` | off | create indexes/validators after documents |
 | `--exit-on-error` | off | abort the whole restore on a non-excluded error |
 
-Tolerated insert errors and pre/post scripts come from the
-[`restore`](configuration/restore.md) config section. Prints a summary
-(`inserted`, `skipped`, `indexes`).
+Each `--include-*`/`--exclude-*` flag falls back to a YAML list in the
+[`restore`](configuration/restore.md#filtering) config section when omitted;
+a non-empty flag on the command line overrides the matching YAML list
+entirely.
+
+Tolerated insert errors, pre/post scripts, and filtering defaults all come
+from the [`restore`](configuration/restore.md) config section. Prints a
+summary (`inserted`, `skipped`, `indexes`).
 
 ### `delete`
 

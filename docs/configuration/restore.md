@@ -1,14 +1,36 @@
 # Restore
 
-The `restore` section controls two things that happen when you restore a dump:
-which insert errors to **tolerate**, and which **scripts** to run around the
-restore. Filtering, ordering, and batching are [command
-flags](../commands.md#restore).
+The `restore` section controls three things: which insert errors to
+**tolerate**, which **scripts** to run around the restore, and default
+**filtering** lists that command flags can override. Ordering and batching
+stay [command flags](../commands.md#restore) only.
 
 ```yaml
 restore:
   insert_error_exclusions: { ... }
   scripts: { ... }
+  include_collections: [ ... ]
+  exclude_collections: [ ... ]
+  include_indexes: [ ... ]
+  exclude_indexes: [ ... ]
+```
+
+## Filtering
+
+`include_collections`, `exclude_collections`, `include_indexes`, and
+`exclude_indexes` set default filter lists for
+[`restore`](../commands.md#restore). A non-empty `--include-collection`,
+`--exclude-collection`, `--include-index`, or `--exclude-index` flag on the
+command line overrides the matching list entirely (same precedence as
+`--uri` overriding `mongodb.uri`) — an unset or empty flag falls back to the
+config list.
+
+```yaml
+restore:
+  include_collections: [users, orders]
+  exclude_collections: [sessions]
+  include_indexes: [email_idx]
+  exclude_indexes: [legacy_idx]
 ```
 
 ## Tolerating insert errors
