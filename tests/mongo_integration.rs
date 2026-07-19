@@ -457,3 +457,27 @@ fn subset_filter_pushes_down_to_mongo_query() {
 
     m.drop_database(&db).unwrap();
 }
+
+// End-to-end bench on a small volume: seeds, dumps, restores, verifies the
+// count, cleans up after itself.
+#[test]
+fn bench_round_trips_and_cleans_up() {
+    use leafmask::bench::{run_bench, BenchOptions};
+
+    let m = connect();
+    let runs = run_bench(
+        &m,
+        &BenchOptions {
+            sizes: vec![1_000],
+            keep: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].docs, 1_000);
+    assert!(!runs[0].estimated);
+    assert!(runs[0].dump_bytes > 0);
+    assert!(runs[0].dump_secs > 0.0 && runs[0].restore_secs > 0.0);
+    // The bench database must be gone afterwards.
+    assert!(!m.databases().unwrap().iter().any(|d| d == "leafmask_bench"));
+}
