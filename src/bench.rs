@@ -194,10 +194,10 @@ mod exec {
 
     pub struct BenchOptions {
         pub sizes: Vec<u64>,
-        /// Leave the bench database and dump directory in place (debug). With
-        /// multiple `sizes`, each size's database is guarded/dropped before
-        /// the next size seeds, so only the *last* size's database and dump
-        /// directory are actually kept.
+        /// Leave the bench database and dump directories in place (debug).
+        /// With multiple `sizes`, each size's database is guarded/dropped
+        /// before the next size seeds, so only the *last* size's database
+        /// survives — but every size's temp dump directory is kept.
         pub keep: bool,
     }
 

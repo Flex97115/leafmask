@@ -50,7 +50,9 @@ common:
 - **`salt`** — the seed shared by all deterministic transformers. The **same
   input + same salt always produces the same output**, on any machine, across
   runs. Keep it stable to preserve referential values between dumps; rotate it to
-  reshuffle all generated data. Defaults to `leafmask` if omitted.
+  reshuffle all generated data. Defaults to `leafmask` if omitted; an empty
+  string is treated as unset (the default salt is used, with a warning when
+  transformations are configured).
 
 ## Environment interpolation
 
