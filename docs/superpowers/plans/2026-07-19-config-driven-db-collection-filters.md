@@ -4,7 +4,7 @@
 
 **Goal:** Let `dump`'s `--include-db`/`--exclude-db`/`--include-collection`/`--exclude-collection` and `restore`'s `--include-collection`/`--exclude-collection`/`--include-index`/`--exclude-index` be set in the YAML config file, with a non-empty CLI flag overriding the config value.
 
-**Architecture:** Two new pure-parsing functions in `src/cli.rs` (`dump_filter_lists`, `restore_filter_lists`) read the new config fields out of the existing `config.dump` / `config.restore` raw `serde_yaml::Value`, following the exact pattern already used by `transformation_configs` and `subset_filters` (one function, one private local struct, one `serde_yaml::from_value` call). A new `resolve_list` helper applies the override rule. Both are wired into `cmd_dump`/`cmd_restore` right before the existing `DumpOptions`/`RestoreOptions` construction — no changes to `DumpOptions`, `RestoreOptions`, `src/dump/create.rs`, or `src/restore/database.rs`.
+**Architecture:** Two new pure-parsing functions in `src/cli.rs` (`dump_filter_lists`, `restore_filter_lists`) read the new config fields out of the existing `config.dump` / `config.restore` raw `serde_yaml::Value`, following the exact pattern already used by `transformation_configs` (one function, one private local struct, one `serde_yaml::from_value` call). A new `resolve_list` helper applies the override rule. Both are wired into `cmd_dump`/`cmd_restore` right before the existing `DumpOptions`/`RestoreOptions` construction — no changes to `DumpOptions`, `RestoreOptions`, `src/dump/create.rs`, or `src/restore/database.rs`.
 
 **Tech Stack:** Rust, clap, serde/serde_yaml (already in use in `src/cli.rs`).
 
@@ -12,7 +12,7 @@
 
 - CLI flag wins only when non-empty; empty/unset CLI flag falls back to the config list (no merging/union) — confirmed design decision.
 - No change to the filtering logic itself (`DumpOptions`/`RestoreOptions` and their `include_*`/`exclude_*` methods are untouched).
-- Follow the existing local-struct-per-concern pattern in `src/cli.rs` (see `transformation_configs`, `subset_filters`) rather than growing an existing multi-field struct.
+- Follow the existing local-struct-per-concern pattern in `src/cli.rs` (see `transformation_configs`) rather than growing an existing multi-field struct.
 - New config fields default to empty lists; omitting them entirely (or omitting `dump:`/`restore:` altogether) must not error.
 - At the end of all tasks (Task 6), delete both this plan file and its spec (`docs/superpowers/specs/2026-07-19-config-driven-db-collection-filters-design.md`) from `docs/` — that folder is Leafmask's published MkDocs site, not a scratch space for planning docs (explicit user instruction).
 
@@ -112,7 +112,7 @@ git commit -m "feat(cli): add resolve_list helper for CLI-overrides-config filte
 
 **Files:**
 - Modify: `src/cli.rs`
-  - Insert new function after `subset_filters` / before `collection_filters` (i.e. right after the closing `}` of `subset_filters`, currently line 224)
+  - Insert new function after `transformation_configs` / before `pub fn run` (i.e. right after the closing `}` of `transformation_configs`, currently line 210)
   - Modify `cmd_dump` (currently lines 387–428)
   - Test: append to the `mod tests` block added in Task 1
 
@@ -169,7 +169,7 @@ Expected: FAIL — `error[E0425]: cannot find function `dump_filter_lists` in th
 
 - [ ] **Step 3: Implement `dump_filter_lists`**
 
-Insert right after `subset_filters`'s closing `}` (currently line 224), before the `/// The MongoDB filter to push down per collection...` doc comment on `collection_filters`:
+Insert right after `transformation_configs`'s closing `}` (currently line 210), before the `/// Entry point invoked by `main`.` doc comment on `pub fn run`:
 
 ```rust
 
@@ -213,7 +213,7 @@ Expected: PASS (6 passed — 3 from Task 1 + 3 new)
 
 - [ ] **Step 5: Wire `dump_filter_lists` + `resolve_list` into `cmd_dump`**
 
-In `cmd_dump` (currently lines 387–428), the body between `let filters = collection_filters(&config, &configs)?;` (line 400) and the `let options = DumpOptions { ... }` block (lines 402–411) changes from:
+In `cmd_dump` (currently lines 328–366), the `let options = DumpOptions { ... }` block (currently lines 341–350) changes from:
 
 ```rust
     let options = DumpOptions {
@@ -268,8 +268,8 @@ git commit -m "feat(dump): allow include/exclude db and collection filters in co
 
 **Files:**
 - Modify: `src/cli.rs`
-  - Insert new function after `dump_filter_lists` (from Task 2) and before `collection_filters` — or anywhere above `cmd_restore`; place it directly after `collection_filters`'s closing `}` (currently line 262) for locality with the other filter-list parser.
-  - Modify `cmd_restore` (currently lines 430–482)
+  - Insert new function directly after `dump_filter_lists` (added by Task 2, right after `transformation_configs`), before `pub fn run`, for locality with the other filter-list parser.
+  - Modify `cmd_restore` (currently lines 369–410, before Task 2's edits; Task 2 does not change `cmd_restore`, only `cmd_dump`, so these line numbers are stable across Task 2)
   - Test: append to `mod tests`
 
 **Interfaces:**
@@ -325,7 +325,7 @@ Expected: FAIL — `error[E0425]: cannot find function `restore_filter_lists` in
 
 - [ ] **Step 3: Implement `restore_filter_lists`**
 
-Insert right after `collection_filters`'s closing `}` (currently line 262), before the `/// Entry point invoked by `main`.` doc comment on `pub fn run`:
+Insert right after `dump_filter_lists`'s closing `}` (added by Task 2, immediately after `transformation_configs`), before the `/// Entry point invoked by `main`.` doc comment on `pub fn run`:
 
 ```rust
 
@@ -373,7 +373,7 @@ Expected: PASS (9 passed — 6 from Tasks 1–2 + 3 new)
 
 - [ ] **Step 5: Wire `restore_filter_lists` + `resolve_list` into `cmd_restore`**
 
-In `cmd_restore` (currently lines 430–482), the `let options = RestoreOptions { ... };` block (currently lines 453–462) changes from:
+In `cmd_restore` (currently lines 369–410), the `let options = RestoreOptions { ... };` block (currently lines 391–400) changes from:
 
 ```rust
     let options = RestoreOptions {
@@ -405,7 +405,7 @@ to:
     };
 ```
 
-This must be inserted **before** the existing `let section: RestoreSection = ...` block is consumed by the later `Restore { ... exclusions: section.insert_error_exclusions, scripts: section.scripts, ... }` — placing the new `let (cfg_include_coll, ...)` line immediately above `let options = RestoreOptions { ... }` (i.e. right after the existing `let section: RestoreSection = if config.restore.is_null() { ... };` block, currently ending line 451) keeps that ordering intact; no other lines in `cmd_restore` move.
+This must be inserted **before** the existing `let section: RestoreSection = ...` block is consumed by the later `Restore { ... exclusions: section.insert_error_exclusions, scripts: section.scripts, ... }` — placing the new `let (cfg_include_coll, ...)` line immediately above `let options = RestoreOptions { ... }` (i.e. right after the existing `let section: RestoreSection = if config.restore.is_null() { ... };` block, currently ending line 389) keeps that ordering intact; no other lines in `cmd_restore` move.
 
 - [ ] **Step 6: Confirm the crate builds with the `mongo` feature**
 
@@ -494,7 +494,7 @@ id.
 
 - [ ] **Step 2: Update the `restore` section of `docs/commands.md`**
 
-The current flag table and surrounding text (lines 104–122) is:
+The current flag table and surrounding text (lines 99–113) is:
 
 ```markdown
 | Flag | Default | Description |
@@ -504,18 +504,14 @@ The current flag table and surrounding text (lines 104–122) is:
 | `--exclude-collection <name>` | | skip these collections (repeatable) |
 | `--include-index <name>` | | restrict to these indexes (repeatable) |
 | `--exclude-index <name>` | | skip these indexes (repeatable) |
-| `--batch-size <n>` | `1000` | documents per bulk-insert batch (one server round-trip per batch) |
-| `--ordered` | off | use ordered bulk writes (stop each batch at its first error) |
+| `--batch-size <n>` | `1000` | documents per bulk-insert batch |
+| `--ordered` | off | use ordered bulk writes |
 | `--dependency-order` | off | create indexes/validators after documents |
 | `--exit-on-error` | off | abort the whole restore on a non-excluded error |
 
-Documents are streamed out of the dump and bulk-inserted `--batch-size` at a
-time, so memory stays flat however large the collection is. A non-excluded
-insert error fails that collection and the restore moves on to the next one
-(the command then exits non-zero listing the failed collections); with
-`--exit-on-error` it aborts everything immediately. Tolerated insert errors and
-pre/post scripts come from the [`restore`](configuration/restore.md) config
-section. Prints a summary (`inserted`, `skipped`, `indexes`).
+Tolerated insert errors and pre/post scripts come from the
+[`restore`](configuration/restore.md) config section. Prints a summary
+(`inserted`, `skipped`, `indexes`).
 ```
 
 Replace it with:
@@ -528,8 +524,8 @@ Replace it with:
 | `--exclude-collection <name>` | | skip these collections (repeatable) |
 | `--include-index <name>` | | restrict to these indexes (repeatable) |
 | `--exclude-index <name>` | | skip these indexes (repeatable) |
-| `--batch-size <n>` | `1000` | documents per bulk-insert batch (one server round-trip per batch) |
-| `--ordered` | off | use ordered bulk writes (stop each batch at its first error) |
+| `--batch-size <n>` | `1000` | documents per bulk-insert batch |
+| `--ordered` | off | use ordered bulk writes |
 | `--dependency-order` | off | create indexes/validators after documents |
 | `--exit-on-error` | off | abort the whole restore on a non-excluded error |
 
@@ -538,14 +534,9 @@ Each `--include-*`/`--exclude-*` flag falls back to a YAML list in the
 a non-empty flag on the command line overrides the matching YAML list
 entirely.
 
-Documents are streamed out of the dump and bulk-inserted `--batch-size` at a
-time, so memory stays flat however large the collection is. A non-excluded
-insert error fails that collection and the restore moves on to the next one
-(the command then exits non-zero listing the failed collections); with
-`--exit-on-error` it aborts everything immediately. Tolerated insert errors,
-pre/post scripts, and filtering defaults all come from the
-[`restore`](configuration/restore.md) config section. Prints a summary
-(`inserted`, `skipped`, `indexes`).
+Tolerated insert errors, pre/post scripts, and filtering defaults all come
+from the [`restore`](configuration/restore.md) config section. Prints a
+summary (`inserted`, `skipped`, `indexes`).
 ```
 
 - [ ] **Step 3: Update `docs/configuration/restore.md`**
