@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use bson::{doc, Bson, Document};
-use leafmask::dump::{read_collection_full, Dump, DumpOptions};
+use leafmask::dump::{list_metadata, read_collection_full, Dump, DumpOptions};
 use leafmask::hash::HashEngine;
 use leafmask::mongo::{MongoDriver, MongoSink, MongoSource};
 use leafmask::restore::{ErrorExclusions, Restore, RestoreOptions};
@@ -210,4 +210,61 @@ fn transformation_applied_on_real_dump() {
     let _ = Bson::Null;
 
     m.drop_database(&db).unwrap();
+}
+
+// A `dump.include_databases` config entry, with no `--include-db` flag on
+// the command line, is enough to restrict which database gets dumped — the
+// scenario that motivated moving these filters into config (avoids spelling
+// out every database/collection on the CLI).
+#[test]
+fn dump_filters_from_config_include_databases_without_cli_flag() {
+    let m = connect();
+    let wanted = db_name("cfgfilt_keep");
+    let skipped = db_name("cfgfilt_skip");
+    m.ensure_collection(&wanted, "users", &None, &BTreeMap::new())
+        .unwrap();
+    m.insert(&wanted, "users", &user(1, "a@x.com")).unwrap();
+    m.ensure_collection(&skipped, "users", &None, &BTreeMap::new())
+        .unwrap();
+    m.insert(&skipped, "users", &user(2, "b@x.com")).unwrap();
+
+    let tmp = tempfile::tempdir().unwrap();
+    let storage_path = tmp.path().join("store");
+    let work_dir = tmp.path().join("work");
+    std::fs::create_dir_all(&work_dir).unwrap();
+    let config_path = tmp.path().join("leafmask.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "common:\n  tmp_dir: {}\nstorage:\n  type: directory\n  path: {}\ndump:\n  include_databases: [{}]\n",
+            work_dir.display(),
+            storage_path.display(),
+            wanted,
+        ),
+    )
+    .unwrap();
+
+    let cli = leafmask::cli::Cli {
+        config: Some(config_path),
+        uri: Some(uri()),
+        command: leafmask::cli::Command::Dump(leafmask::cli::DumpArgs {
+            gzip: false,
+            include_db: vec![],
+            exclude_db: vec![],
+            include_collection: vec![],
+            exclude_collection: vec![],
+            jobs: 1,
+            no_indexes: false,
+        }),
+    };
+    leafmask::cli::run(cli).unwrap();
+
+    let storage = leafmask::storage::DirectoryStorage::new(&storage_path).unwrap();
+    let dumps = list_metadata(&storage).unwrap();
+    assert_eq!(dumps.len(), 1);
+    let db_names: Vec<&str> = dumps[0].databases.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(db_names, vec![wanted.as_str()]);
+
+    m.drop_database(&wanted).unwrap();
+    m.drop_database(&skipped).unwrap();
 }
