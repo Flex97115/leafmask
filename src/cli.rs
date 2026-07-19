@@ -178,6 +178,19 @@ fn resolve_uri(cli: &Cli, config: &crate::config::Config) -> crate::Result<Strin
         })
 }
 
+/// Resolve a repeatable filter list: a non-empty CLI value overrides the
+/// config value entirely (same precedence as `--uri` over `mongodb.uri`,
+/// applied per-list instead of per-scalar). An empty CLI value falls back to
+/// whatever the config declared, including empty.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn resolve_list(cli: Vec<String>, config: Vec<String>) -> Vec<String> {
+    if cli.is_empty() {
+        config
+    } else {
+        cli
+    }
+}
+
 /// Parse the `dump.transformation` section into a plan-ready config list.
 #[cfg_attr(not(feature = "mongo"), allow(dead_code))]
 fn transformation_configs(
@@ -444,4 +457,30 @@ fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
     )?;
     print!("{out}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_list_falls_back_to_config_when_cli_is_empty() {
+        let result = resolve_list(vec![], vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(result, vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn resolve_list_cli_overrides_nonempty_config_entirely() {
+        let result = resolve_list(
+            vec!["x".to_string()],
+            vec!["a".to_string(), "b".to_string()],
+        );
+        assert_eq!(result, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn resolve_list_both_empty_is_empty() {
+        let result: Vec<String> = resolve_list(vec![], vec![]);
+        assert!(result.is_empty());
+    }
 }
