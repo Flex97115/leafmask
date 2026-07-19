@@ -241,6 +241,42 @@ fn dump_filter_lists(
     ))
 }
 
+/// Parse `restore.include_collections` / `exclude_collections` /
+/// `include_indexes` / `exclude_indexes` from config. These are the YAML
+/// fallback for the `--include-collection`/`--exclude-collection`/
+/// `--include-index`/`--exclude-index` flags — see `resolve_list` for the
+/// override precedence. Parsed separately from the `insert_error_exclusions`
+/// / `scripts` section already handled inside `cmd_restore`, mirroring how
+/// `dump.transformation` and `dump.subset_conds` are each parsed by their own
+/// function above.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn restore_filter_lists(
+    config: &crate::config::Config,
+) -> crate::Result<(Vec<String>, Vec<String>, Vec<String>, Vec<String>)> {
+    if config.restore.is_null() {
+        return Ok(Default::default());
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct RestoreFilterSection {
+        #[serde(default)]
+        include_collections: Vec<String>,
+        #[serde(default)]
+        exclude_collections: Vec<String>,
+        #[serde(default)]
+        include_indexes: Vec<String>,
+        #[serde(default)]
+        exclude_indexes: Vec<String>,
+    }
+    let section: RestoreFilterSection = serde_yaml::from_value(config.restore.clone())
+        .map_err(|e| crate::Error::Config(format!("restore filters: {e}")))?;
+    Ok((
+        section.include_collections,
+        section.exclude_collections,
+        section.include_indexes,
+        section.exclude_indexes,
+    ))
+}
+
 /// Entry point invoked by `main`.
 pub fn run(cli: Cli) -> crate::Result<()> {
     match &cli.command {
@@ -422,11 +458,13 @@ fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> crate::Result<()> {
             .map_err(|e| crate::Error::Config(format!("restore: {e}")))?
     };
 
+    let (cfg_include_coll, cfg_exclude_coll, cfg_include_idx, cfg_exclude_idx) =
+        restore_filter_lists(&config)?;
     let options = RestoreOptions {
-        include_collections: args.include_collection.clone(),
-        exclude_collections: args.exclude_collection.clone(),
-        include_indexes: args.include_index.clone(),
-        exclude_indexes: args.exclude_index.clone(),
+        include_collections: resolve_list(args.include_collection.clone(), cfg_include_coll),
+        exclude_collections: resolve_list(args.exclude_collection.clone(), cfg_exclude_coll),
+        include_indexes: resolve_list(args.include_index.clone(), cfg_include_idx),
+        exclude_indexes: resolve_list(args.exclude_index.clone(), cfg_exclude_idx),
         batch_size: args.batch_size,
         ordered: args.ordered,
         dependency_order: args.dependency_order,
@@ -551,5 +589,40 @@ mod tests {
         .unwrap();
         let (include_db, _, _, _) = dump_filter_lists(&config).unwrap();
         assert_eq!(include_db, vec!["shop".to_string()]);
+    }
+
+    #[test]
+    fn restore_filter_lists_parses_all_four_fields() {
+        let config = crate::config::parse_str(
+            "restore:\n  include_collections: [users]\n  exclude_collections: [sessions]\n  include_indexes: [email_idx]\n  exclude_indexes: [legacy_idx]\n",
+        )
+        .unwrap();
+        let (include_coll, exclude_coll, include_idx, exclude_idx) =
+            restore_filter_lists(&config).unwrap();
+        assert_eq!(include_coll, vec!["users".to_string()]);
+        assert_eq!(exclude_coll, vec!["sessions".to_string()]);
+        assert_eq!(include_idx, vec!["email_idx".to_string()]);
+        assert_eq!(exclude_idx, vec!["legacy_idx".to_string()]);
+    }
+
+    #[test]
+    fn restore_filter_lists_defaults_to_empty_without_restore_section() {
+        let config = crate::config::parse_str("common:\n  tmp_dir: /tmp\n").unwrap();
+        let (include_coll, exclude_coll, include_idx, exclude_idx) =
+            restore_filter_lists(&config).unwrap();
+        assert!(include_coll.is_empty());
+        assert!(exclude_coll.is_empty());
+        assert!(include_idx.is_empty());
+        assert!(exclude_idx.is_empty());
+    }
+
+    #[test]
+    fn restore_filter_lists_ignores_unrelated_restore_fields() {
+        let config = crate::config::parse_str(
+            "restore:\n  insert_error_exclusions:\n    global_error_codes: [11000]\n  include_collections: [users]\n",
+        )
+        .unwrap();
+        let (include_coll, _, _, _) = restore_filter_lists(&config).unwrap();
+        assert_eq!(include_coll, vec!["users".to_string()]);
     }
 }
