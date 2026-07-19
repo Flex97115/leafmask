@@ -87,6 +87,23 @@ pub struct Common {
     pub salt: Option<String>,
 }
 
+/// The salt used when `common.salt` is left unset. It is a fixed, public
+/// constant, so anonymization run without an explicit salt is reversible by
+/// anyone who knows leafmask — callers should warn when they fall back to it.
+pub const DEFAULT_SALT: &str = "leafmask";
+
+impl Common {
+    /// The effective anonymization salt and whether it is the insecure built-in
+    /// default. When the boolean is `true`, the operator did not configure
+    /// `common.salt` and deterministic transformations are reversible.
+    pub fn resolve_salt(&self) -> (String, bool) {
+        match &self.salt {
+            Some(s) if !s.is_empty() => (s.clone(), false),
+            _ => (DEFAULT_SALT.to_string(), true),
+        }
+    }
+}
+
 /// The `storage` config section — a discriminated backend plus its raw params.
 /// The concrete backends interpret `params` themselves.
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -271,6 +288,28 @@ mod tests {
             cfg.mongodb.uri.as_deref(),
             Some("mongodb://user:pÀsswörd@h")
         );
+    }
+
+    // A configured salt is used as-is; an absent or empty salt falls back to
+    // the insecure public default and is flagged so callers can warn.
+    #[test]
+    fn resolve_salt_flags_the_insecure_default() {
+        let configured = Common {
+            salt: Some("pepper".into()),
+            ..Default::default()
+        };
+        assert_eq!(configured.resolve_salt(), ("pepper".to_string(), false));
+
+        let (salt, is_default) = Common::default().resolve_salt();
+        assert_eq!(salt, DEFAULT_SALT);
+        assert!(is_default);
+
+        // An explicitly empty salt is treated as unset, not as a real salt.
+        let empty = Common {
+            salt: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(empty.resolve_salt().1);
     }
 
     // Acceptance: an unknown key is rejected as an error.

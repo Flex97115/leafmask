@@ -414,13 +414,14 @@ fn cmd_validate(_cli: &Cli, _args: &ValidateArgs) -> crate::Result<()> {
 
 #[cfg(feature = "mongo")]
 fn engine_from(config: &crate::config::Config) -> crate::hash::HashEngine {
-    crate::hash::HashEngine::new(
-        config
-            .common
-            .salt
-            .clone()
-            .unwrap_or_else(|| "leafmask".into()),
-    )
+    let (salt, is_default) = config.common.resolve_salt();
+    if is_default {
+        log::warn!(
+            "common.salt is not set: using the built-in default salt, which is public and makes \
+             deterministic anonymization reversible. Set common.salt to a private value."
+        );
+    }
+    crate::hash::HashEngine::new(salt)
 }
 
 #[cfg(feature = "mongo")]
