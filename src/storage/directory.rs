@@ -25,7 +25,12 @@ impl DirectoryStorage {
 
     fn resolve(&self, rel: &str) -> PathBuf {
         let mut p = self.root.clone();
-        for seg in rel.split('/').filter(|s| !s.is_empty() && *s != ".") {
+        // `..` is dropped alongside `.` and empty segments so a crafted dump
+        // id / db / collection name can never escape the storage root.
+        for seg in rel
+            .split('/')
+            .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        {
             p.push(seg);
         }
         p
@@ -190,6 +195,30 @@ mod tests {
         s.delete("d").unwrap();
         assert!(!s.exists("d").unwrap());
         assert_eq!(s.list_dumps().unwrap(), Vec::<String>::new());
+    }
+
+    // A dump id / db / collection name containing `..` must not let a read or
+    // write escape the configured storage root: `..` segments are contained
+    // just like `.` already is.
+    #[test]
+    fn path_traversal_is_contained() {
+        // The root is nested inside its own tempdir so its parent is isolated
+        // (asserting against the shared system temp dir would be flaky).
+        let outer = tempfile::tempdir().unwrap();
+        let root = outer.path().join("root");
+        let s = DirectoryStorage::new(&root).unwrap();
+
+        s.put("../escape.bson", b"pwned").unwrap();
+        assert!(
+            !outer.path().join("escape.bson").exists(),
+            "path traversal escaped the storage root"
+        );
+        // The write is contained inside the root instead.
+        assert!(s.exists("escape.bson").unwrap());
+
+        // Deeper traversal is contained too.
+        s.put("a/../../b.bson", b"x").unwrap();
+        assert!(!outer.path().join("b.bson").exists());
     }
 
     #[test]
