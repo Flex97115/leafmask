@@ -52,6 +52,26 @@ for staging, CI, or local development.
 - 🔍 **Preview before you run** — `validate --data` shows a before/after diff
   against a live sample, without producing a dump.
 
+## Performance
+
+Measured with `leafmask bench` — synthetic "client" documents (~10 fields:
+identity, contact, address, status, dates, counters) dumped with gzip to local
+directory storage and restored into an empty database. Figures exclude any S3
+network cost; storage is a local directory. Machine: Apple M3, 24 GiB RAM —
+MongoDB 7 in Docker, local.
+
+| Documents | Dump | Restore | Dump size | Docs/s (dump) |
+|---|---|---|---|---|
+| 100,000 | 0.6s | 0.9s | 2.4 MiB | 175,799 |
+| 1,000,000 | 5.3s | 9.0s | 24.1 MiB | 189,319 |
+| 10,000,000 *(estimated)* | 52.8s | 1m 30s | 241.4 MiB | 189,319 |
+
+The 10M row is a linear extrapolation from the 1M run. Reproduce with:
+
+```sh
+leafmask bench --uri mongodb://localhost:27017 --markdown
+```
+
 ## Quick start
 
 ```yaml title="leafmask.yaml"

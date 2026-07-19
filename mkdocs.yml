@@ -80,4 +80,5 @@ nav:
       - Restore: configuration/restore.md
   - Transformers: transformers.md
   - Commands: commands.md
+  - Benchmarks: benchmarks.md
   - Full config example: config-example.md

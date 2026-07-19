@@ -12,9 +12,9 @@ Global options apply to every command:
 | `--uri <uri>` | `LEAFMASK_MONGO_URI` | MongoDB URI, overriding `mongodb.uri` |
 
 !!! info "Feature-gated commands"
-    `dump`, `restore`, and `validate` need a binary built with the `mongo`
-    feature (included in the prebuilt binaries and Docker image). Without it they
-    appear in `--help` but error clearly when invoked.
+    `dump`, `restore`, `validate`, and `bench` need a binary built with the
+    `mongo` feature (included in the prebuilt binaries and Docker image).
+    Without it they appear in `--help` but error clearly when invoked.
 
 ---
 
@@ -196,3 +196,32 @@ leafmask --config leafmask.yaml validate --data \
 | `--strict` | off | fail on any unresolved validation warning |
 
 An invalid `--format` or `--table-format` fails fast, before any database work.
+
+---
+
+## Benchmarking
+
+### `bench`
+
+Measure real dump/restore throughput against a live MongoDB deployment. It
+seeds synthetic "client" documents into a temporary `leafmask_bench` database,
+times a gzip dump to local directory storage, drops the database, times a
+restore, verifies the document count, and cleans everything up. The seeding
+step itself is not counted in the timings.
+
+```sh
+leafmask bench --uri mongodb://localhost:27017 --markdown
+```
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--uri <uri>` | — | MongoDB URI (or use the global `--uri` / `LEAFMASK_MONGO_URI`) |
+| `--sizes <n,n,...>` | `100000,1000000` | document counts to benchmark, comma-separated |
+| `--estimate <n>` | `10000000` | an additional row, linearly extrapolated from the largest measured size (marked *(estimated)*, not actually run) |
+| `--markdown` | off | print the results as a markdown table instead of plain text |
+| `--keep` | off | keep the `leafmask_bench` database for the last size instead of dropping it |
+
+As a safety guard, `bench` refuses to touch a `leafmask_bench` database it
+didn't create itself (detected via a marker collection), so it never
+overwrites unrelated data. See [Benchmarks](benchmarks.md) for full results
+and machine specs.
