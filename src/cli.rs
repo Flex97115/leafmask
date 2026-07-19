@@ -209,14 +209,16 @@ fn transformation_configs(
     Ok(section.transformation)
 }
 
+/// Four filter lists in `(include, exclude, ...)` pairs, as returned by
+/// `dump_filter_lists`/`restore_filter_lists`.
+type FilterListQuad = (Vec<String>, Vec<String>, Vec<String>, Vec<String>);
+
 /// Parse `dump.include_databases` / `exclude_databases` / `include_collections`
 /// / `exclude_collections` from config. These are the YAML fallback for the
 /// `--include-db`/`--exclude-db`/`--include-collection`/`--exclude-collection`
 /// flags — see `resolve_list` for the override precedence.
 #[cfg_attr(not(feature = "mongo"), allow(dead_code))]
-fn dump_filter_lists(
-    config: &crate::config::Config,
-) -> crate::Result<(Vec<String>, Vec<String>, Vec<String>, Vec<String>)> {
+fn dump_filter_lists(config: &crate::config::Config) -> crate::Result<FilterListQuad> {
     if config.dump.is_null() {
         return Ok(Default::default());
     }
@@ -250,9 +252,7 @@ fn dump_filter_lists(
 /// `dump.transformation` and `dump.subset_conds` are each parsed by their own
 /// function above.
 #[cfg_attr(not(feature = "mongo"), allow(dead_code))]
-fn restore_filter_lists(
-    config: &crate::config::Config,
-) -> crate::Result<(Vec<String>, Vec<String>, Vec<String>, Vec<String>)> {
+fn restore_filter_lists(config: &crate::config::Config) -> crate::Result<FilterListQuad> {
     if config.restore.is_null() {
         return Ok(Default::default());
     }
@@ -583,10 +583,9 @@ mod tests {
 
     #[test]
     fn dump_filter_lists_ignores_unrelated_dump_fields() {
-        let config = crate::config::parse_str(
-            "dump:\n  transformation: []\n  include_databases: [shop]\n",
-        )
-        .unwrap();
+        let config =
+            crate::config::parse_str("dump:\n  transformation: []\n  include_databases: [shop]\n")
+                .unwrap();
         let (include_db, _, _, _) = dump_filter_lists(&config).unwrap();
         assert_eq!(include_db, vec!["shop".to_string()]);
     }
