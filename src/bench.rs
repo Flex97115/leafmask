@@ -285,6 +285,13 @@ mod exec {
         // Restore into an empty database of the same name (restore keeps the
         // dumped database name; no remapping exists).
         driver.drop_database(BENCH_DB)?;
+        // Invariant: every database this bench creates carries the marker, so
+        // the guard only ever refuses databases it did not create. Re-create
+        // it here (the dump did not include it) so any state this bench
+        // leaves behind from here on — an interrupted restore, --keep, or a
+        // restore-count mismatch below — is still recognized and auto-cleaned
+        // by the next run's guard.
+        driver.ensure_collection(BENCH_DB, MARKER, &None, &BTreeMap::new())?;
         let restore = Restore {
             storage: &storage,
             sink: driver,
