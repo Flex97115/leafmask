@@ -113,7 +113,7 @@ git commit -m "feat(cli): add resolve_list helper for CLI-overrides-config filte
 **Files:**
 - Modify: `src/cli.rs`
   - Insert new function after `transformation_configs` / before `pub fn run` (i.e. right after the closing `}` of `transformation_configs`, currently line 210)
-  - Modify `cmd_dump` (currently lines 387–428)
+  - Modify `cmd_dump` (currently lines 328–366)
   - Test: append to the `mod tests` block added in Task 1
 
 **Interfaces:**
