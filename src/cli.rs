@@ -209,6 +209,38 @@ fn transformation_configs(
     Ok(section.transformation)
 }
 
+/// Parse `dump.include_databases` / `exclude_databases` / `include_collections`
+/// / `exclude_collections` from config. These are the YAML fallback for the
+/// `--include-db`/`--exclude-db`/`--include-collection`/`--exclude-collection`
+/// flags — see `resolve_list` for the override precedence.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn dump_filter_lists(
+    config: &crate::config::Config,
+) -> crate::Result<(Vec<String>, Vec<String>, Vec<String>, Vec<String>)> {
+    if config.dump.is_null() {
+        return Ok(Default::default());
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DumpSection {
+        #[serde(default)]
+        include_databases: Vec<String>,
+        #[serde(default)]
+        exclude_databases: Vec<String>,
+        #[serde(default)]
+        include_collections: Vec<String>,
+        #[serde(default)]
+        exclude_collections: Vec<String>,
+    }
+    let section: DumpSection = serde_yaml::from_value(config.dump.clone())
+        .map_err(|e| crate::Error::Config(format!("dump filters: {e}")))?;
+    Ok((
+        section.include_databases,
+        section.exclude_databases,
+        section.include_collections,
+        section.exclude_collections,
+    ))
+}
+
 /// Entry point invoked by `main`.
 pub fn run(cli: Cli) -> crate::Result<()> {
     match &cli.command {
@@ -338,12 +370,14 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
     let configs = transformation_configs(&config)?;
     let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
 
+    let (cfg_include_db, cfg_exclude_db, cfg_include_coll, cfg_exclude_coll) =
+        dump_filter_lists(&config)?;
     let options = DumpOptions {
         tmp_dir: config.common.tmp_dir.clone(),
-        include_databases: args.include_db.clone(),
-        exclude_databases: args.exclude_db.clone(),
-        include_collections: args.include_collection.clone(),
-        exclude_collections: args.exclude_collection.clone(),
+        include_databases: resolve_list(args.include_db.clone(), cfg_include_db),
+        exclude_databases: resolve_list(args.exclude_db.clone(), cfg_exclude_db),
+        include_collections: resolve_list(args.include_collection.clone(), cfg_include_coll),
+        exclude_collections: resolve_list(args.exclude_collection.clone(), cfg_exclude_coll),
         gzip: args.gzip,
         parallel_jobs: args.jobs,
         no_indexes: args.no_indexes,
@@ -482,5 +516,40 @@ mod tests {
     fn resolve_list_both_empty_is_empty() {
         let result: Vec<String> = resolve_list(vec![], vec![]);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn dump_filter_lists_parses_all_four_fields() {
+        let config = crate::config::parse_str(
+            "dump:\n  include_databases: [shop]\n  exclude_databases: [logs]\n  include_collections: [users]\n  exclude_collections: [sessions]\n",
+        )
+        .unwrap();
+        let (include_db, exclude_db, include_coll, exclude_coll) =
+            dump_filter_lists(&config).unwrap();
+        assert_eq!(include_db, vec!["shop".to_string()]);
+        assert_eq!(exclude_db, vec!["logs".to_string()]);
+        assert_eq!(include_coll, vec!["users".to_string()]);
+        assert_eq!(exclude_coll, vec!["sessions".to_string()]);
+    }
+
+    #[test]
+    fn dump_filter_lists_defaults_to_empty_without_dump_section() {
+        let config = crate::config::parse_str("common:\n  tmp_dir: /tmp\n").unwrap();
+        let (include_db, exclude_db, include_coll, exclude_coll) =
+            dump_filter_lists(&config).unwrap();
+        assert!(include_db.is_empty());
+        assert!(exclude_db.is_empty());
+        assert!(include_coll.is_empty());
+        assert!(exclude_coll.is_empty());
+    }
+
+    #[test]
+    fn dump_filter_lists_ignores_unrelated_dump_fields() {
+        let config = crate::config::parse_str(
+            "dump:\n  transformation: []\n  include_databases: [shop]\n",
+        )
+        .unwrap();
+        let (include_db, _, _, _) = dump_filter_lists(&config).unwrap();
+        assert_eq!(include_db, vec!["shop".to_string()]);
     }
 }
