@@ -362,14 +362,23 @@ mod driver {
         }
 
         fn collections(&self, database: &str) -> Result<Vec<String>> {
-            self.rt
+            let names = self
+                .rt
                 .block_on(
                     self.client
                         .database(database)
                         .list_collection_names()
                         .into_future(),
                 )
-                .map_err(|e| Error::Mongo(format!("listCollections: {e}")))
+                .map_err(|e| Error::Mongo(format!("listCollections: {e}")))?;
+            // MongoDB's own catalog collections (e.g. `system.views`, kept
+            // around even after every view in the database has been dropped)
+            // require privileges beyond a normal read role and were never
+            // meant to be dumped as user data.
+            Ok(names
+                .into_iter()
+                .filter(|c| !c.starts_with("system."))
+                .collect())
         }
 
         fn read_collection(&self, database: &str, collection: &str) -> Result<CollectionData> {

@@ -200,7 +200,12 @@ impl<'a> Dump<'a> {
                         break;
                     }
                     let result = self.dump_item(id, tmp_dir, &items[i]);
-                    if result.is_err() {
+                    if let Err(e) = &result {
+                        // Items already claimed (possibly still running, e.g.
+                        // a large in-flight collection on another thread)
+                        // finish normally, so this failure may not surface as
+                        // the run's final error for a while yet — log it now.
+                        log::error!("  {}.{}: dump failed: {e}", items[i].db, items[i].coll);
                         stop.store(true, Ordering::Relaxed);
                     }
                     *results[i].lock().unwrap() = Some(result);

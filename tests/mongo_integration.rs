@@ -77,6 +77,35 @@ fn sink_and_source_round_trip_through_real_mongo() {
     m.drop_database(&db).unwrap();
 }
 
+// Creating a view makes MongoDB materialize a `system.views` catalog
+// collection, which shows up in raw `listCollections` output as its own
+// collection-typed entry. `collections()` must filter it (and any other
+// `system.*` namespace) out — dumping it fails with an authorization error
+// under any role that isn't allowed to read MongoDB's internal catalog, and
+// it was never user data in the first place.
+#[test]
+fn collections_excludes_system_namespaces() {
+    let m = connect();
+    let db = db_name("views");
+
+    m.ensure_collection(&db, "users", &None, &BTreeMap::new())
+        .unwrap();
+    m.insert(&db, "users", &user(1, "a@x.com")).unwrap();
+
+    let mut view_options = BTreeMap::new();
+    view_options.insert("viewOn".to_string(), Bson::String("users".into()));
+    view_options.insert("pipeline".to_string(), Bson::Array(vec![]));
+    m.ensure_collection(&db, "users_view", &None, &view_options)
+        .unwrap();
+
+    let cols = m.collections(&db).unwrap();
+    assert!(cols.contains(&"users".to_string()));
+    assert!(cols.contains(&"users_view".to_string()));
+    assert!(!cols.iter().any(|c| c.starts_with("system.")));
+
+    m.drop_database(&db).unwrap();
+}
+
 // A duplicate `_id` insert surfaces as an InsertError with code 11000 and the
 // offending index name, which is what error-exclusions match on.
 #[test]
