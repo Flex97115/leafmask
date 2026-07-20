@@ -7,6 +7,7 @@
 
 pub mod azure;
 pub mod directory;
+pub(crate) mod multipart;
 pub mod s3;
 pub mod selection;
 pub mod ssh;
