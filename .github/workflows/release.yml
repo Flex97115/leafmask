@@ -89,6 +89,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      # The binaries job already cross-compiled aarch64-unknown-linux-gnu
+      # natively (on a real ARM runner) alongside x86_64-unknown-linux-gnu.
+      # Reuse both instead of recompiling the full feature set from source
+      # under QEMU emulation for the arm64 image — that step alone used to
+      # take well over an hour.
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Stage per-arch binaries for the Docker build context
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin/amd64 bin/arm64
+          tar -xzf "dist/leafmask-${GITHUB_REF_NAME}-x86_64-unknown-linux-gnu.tar.gz" -C bin/amd64
+          tar -xzf "dist/leafmask-${GITHUB_REF_NAME}-aarch64-unknown-linux-gnu.tar.gz" -C bin/arm64
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
@@ -110,9 +128,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
+          target: runtime-prebuilt
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
