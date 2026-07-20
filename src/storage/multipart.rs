@@ -193,10 +193,12 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    type PartList = Arc<Mutex<Vec<(u64, Vec<u8>)>>>;
+
     /// Records every call so tests can assert on behavior without any
     /// network access.
     struct FakeSink {
-        parts: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        parts: PartList,
         completed: Arc<Mutex<Option<Vec<String>>>>,
         aborted: Arc<Mutex<bool>>,
         fail_on_part: Option<u64>,
@@ -222,7 +224,7 @@ mod tests {
     }
 
     struct Fixture {
-        parts: Arc<Mutex<Vec<(u64, Vec<u8>)>>>,
+        parts: PartList,
         completed: Arc<Mutex<Option<Vec<String>>>>,
         aborted: Arc<Mutex<bool>>,
     }

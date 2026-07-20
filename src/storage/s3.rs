@@ -76,7 +76,8 @@ pub use imp::S3Storage;
 #[cfg(feature = "s3")]
 mod imp {
     use super::*;
-    use crate::storage::Storage;
+    use crate::storage::multipart::{PartSink, StreamingMultipartWriter};
+    use crate::storage::{MultipartWriter, Storage};
     use aws_sdk_s3::primitives::ByteStream;
     use aws_sdk_s3::Client;
     use tokio::runtime::Runtime;
@@ -116,6 +117,82 @@ mod imp {
                 Client::from_conf(conf)
             });
             Ok(S3Storage { cfg, client, rt })
+        }
+    }
+
+    struct S3PartSink {
+        handle: tokio::runtime::Handle,
+        client: Client,
+        bucket: String,
+        key: String,
+        upload_id: String,
+    }
+
+    impl PartSink for S3PartSink {
+        fn send_part(&mut self, part_number: u64, data: Vec<u8>) -> Result<String> {
+            log::info!(
+                "  sending part {part_number} ({:.1} MiB) to s3: {}/{}",
+                data.len() as f64 / (1024.0 * 1024.0),
+                self.bucket,
+                self.key
+            );
+            let resp = self
+                .handle
+                .block_on(
+                    self.client
+                        .upload_part()
+                        .bucket(&self.bucket)
+                        .key(&self.key)
+                        .upload_id(&self.upload_id)
+                        .part_number(part_number as i32)
+                        .body(ByteStream::from(data))
+                        .send(),
+                )
+                .map_err(|e| Error::Storage(format!("upload_part: {e}")))?;
+            resp.e_tag()
+                .map(str::to_string)
+                .ok_or_else(|| Error::Storage("upload_part response missing ETag".into()))
+        }
+
+        fn complete(self: Box<Self>, tokens: Vec<String>) -> Result<()> {
+            use aws_sdk_s3::types::{CompletedMultipartUpload, CompletedPart};
+            let parts: Vec<CompletedPart> = tokens
+                .into_iter()
+                .enumerate()
+                .map(|(i, etag)| {
+                    CompletedPart::builder()
+                        .part_number(i as i32 + 1)
+                        .e_tag(etag)
+                        .build()
+                })
+                .collect();
+            self.handle
+                .block_on(
+                    self.client
+                        .complete_multipart_upload()
+                        .bucket(&self.bucket)
+                        .key(&self.key)
+                        .upload_id(&self.upload_id)
+                        .multipart_upload(
+                            CompletedMultipartUpload::builder()
+                                .set_parts(Some(parts))
+                                .build(),
+                        )
+                        .send(),
+                )
+                .map_err(|e| Error::Storage(format!("complete_multipart_upload: {e}")))?;
+            Ok(())
+        }
+
+        fn abort(&mut self) {
+            let _ = self.handle.block_on(
+                self.client
+                    .abort_multipart_upload()
+                    .bucket(&self.bucket)
+                    .key(&self.key)
+                    .upload_id(&self.upload_id)
+                    .send(),
+            );
         }
     }
 
@@ -323,6 +400,34 @@ mod imp {
                 Ok::<(), Error>(())
             })?;
             Ok(total)
+        }
+
+        fn multipart_writer(&self, path: &str) -> Result<Option<Box<dyn MultipartWriter>>> {
+            let key = self.cfg.object_key(path);
+            let upload_id = self
+                .rt
+                .block_on(
+                    self.client
+                        .create_multipart_upload()
+                        .bucket(&self.cfg.bucket)
+                        .key(&key)
+                        .send(),
+                )
+                .map_err(|e| Error::Storage(format!("create_multipart_upload: {e}")))?
+                .upload_id()
+                .ok_or_else(|| {
+                    Error::Storage("create_multipart_upload response missing upload id".into())
+                })?
+                .to_string();
+
+            let sink = S3PartSink {
+                handle: self.rt.handle().clone(),
+                client: self.client.clone(),
+                bucket: self.cfg.bucket.clone(),
+                key,
+                upload_id,
+            };
+            Ok(Some(Box::new(StreamingMultipartWriter::spawn(Box::new(sink)))))
         }
     }
 }
