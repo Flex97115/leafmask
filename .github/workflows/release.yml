@@ -18,21 +18,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux targets build inside a rust:1-bookworm container so the
+          # binary links against Debian bookworm's glibc — the same base
+          # image the Docker runtime uses (see Dockerfile's runtime-prebuilt
+          # stage). Building directly on the bare ubuntu-latest/-arm runner
+          # links against whatever glibc that runner image ships (which
+          # drifts forward independently, e.g. Ubuntu 24.04 -> glibc 2.39),
+          # newer than bookworm's -> "GLIBC_2.39 not found" at container
+          # runtime even though the binary runs fine on the runner itself.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            container: rust:1-bookworm
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-24.04-arm
+            container: rust:1-bookworm
           - target: x86_64-apple-darwin
             os: macos-15-intel
           - target: aarch64-apple-darwin
             os: macos-15
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     steps:
       - uses: actions/checkout@v6
 
       - name: Install build deps (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config perl make
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config perl make
 
       - name: Sync crate version to the tag
         shell: bash
