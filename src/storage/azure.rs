@@ -18,6 +18,13 @@ pub struct AzureConfig {
     pub access_key: Option<String>,
     /// Blob-name prefix all dumps live under within the container.
     pub prefix: String,
+    /// Point at an Azurite-compatible emulator instead of the public Azure
+    /// cloud. When set, `account`/`access_key` are ignored — the emulator's
+    /// well-known development credentials are used instead.
+    pub emulator_host: Option<String>,
+    /// Defaults to Azurite's standard blob-service port (10000) when
+    /// `emulator_host` is set but this is not.
+    pub emulator_port: Option<u16>,
 }
 
 impl AzureConfig {
@@ -29,6 +36,11 @@ impl AzureConfig {
             container,
             access_key: str_param(p, "access_key"),
             prefix: str_param(p, "prefix").unwrap_or_default(),
+            emulator_host: str_param(p, "emulator_host"),
+            emulator_port: p
+                .get("emulator_port")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u16),
         })
     }
 
@@ -48,8 +60,10 @@ pub use imp::AzureStorage;
 #[cfg(feature = "azure")]
 mod imp {
     use super::*;
-    use crate::storage::Storage;
+    use crate::storage::multipart::{PartSink, StreamingMultipartWriter};
+    use crate::storage::{MultipartWriter, Storage};
     use azure_storage::prelude::*;
+    use azure_storage::CloudLocation;
     use azure_storage_blobs::prelude::*;
     use futures::StreamExt;
     use tokio::runtime::Runtime;
@@ -63,19 +77,75 @@ mod imp {
 
     impl AzureStorage {
         pub fn open(cfg: AzureConfig) -> Result<Self> {
-            let account = cfg
-                .account
-                .clone()
-                .ok_or_else(|| Error::Storage("azure storage requires an 'account'".into()))?;
-            let key = cfg
-                .access_key
-                .clone()
-                .ok_or_else(|| Error::Storage("azure storage requires an 'access_key'".into()))?;
-            let creds = StorageCredentials::access_key(account.clone(), key);
-            let container =
-                ClientBuilder::new(account, creds).container_client(cfg.container.clone());
             let rt = Runtime::new().map_err(|e| Error::Storage(e.to_string()))?;
+            let container = if let Some(host) = cfg.emulator_host.clone() {
+                let port = cfg.emulator_port.unwrap_or(10000);
+                ClientBuilder::with_location(
+                    CloudLocation::Emulator {
+                        address: host,
+                        port,
+                    },
+                    StorageCredentials::emulator(),
+                )
+                .container_client(cfg.container.clone())
+            } else {
+                let account = cfg
+                    .account
+                    .clone()
+                    .ok_or_else(|| Error::Storage("azure storage requires an 'account'".into()))?;
+                let key = cfg
+                    .access_key
+                    .clone()
+                    .ok_or_else(|| Error::Storage("azure storage requires an 'access_key'".into()))?;
+                let creds = StorageCredentials::access_key(account.clone(), key);
+                ClientBuilder::new(account, creds).container_client(cfg.container.clone())
+            };
             Ok(AzureStorage { cfg, container, rt })
+        }
+    }
+
+    struct AzurePartSink {
+        handle: tokio::runtime::Handle,
+        blob: BlobClient,
+        blob_name: String,
+    }
+
+    impl PartSink for AzurePartSink {
+        fn send_part(&mut self, part_number: u64, data: Vec<u8>) -> Result<String> {
+            log::info!(
+                "  sending block {part_number} ({:.1} MiB) to azure: {}",
+                data.len() as f64 / (1024.0 * 1024.0),
+                self.blob_name
+            );
+            // Azure requires every block ID for a blob to be the same byte
+            // length before base64 encoding; zero-padding the part number
+            // to a fixed width guarantees that regardless of magnitude.
+            let id = format!("{part_number:020}");
+            self.handle
+                .block_on(
+                    self.blob
+                        .put_block(BlockId::new(id.clone().into_bytes()), data)
+                        .into_future(),
+                )
+                .map_err(|e| Error::Storage(format!("put_block: {e}")))?;
+            Ok(id)
+        }
+
+        fn complete(self: Box<Self>, tokens: Vec<String>) -> Result<()> {
+            let blocks = tokens
+                .into_iter()
+                .map(|id| BlobBlockType::new_latest(BlockId::new(id.into_bytes())))
+                .collect();
+            self.handle
+                .block_on(self.blob.put_block_list(BlockList { blocks }).into_future())
+                .map_err(|e| Error::Storage(format!("put_block_list: {e}")))?;
+            Ok(())
+        }
+
+        fn abort(&mut self) {
+            // Azure has no explicit "abort" for uncommitted blocks: a block
+            // that's never referenced by put_block_list is simply garbage
+            // collected by the service after 7 days. Nothing to do here.
         }
     }
 
@@ -160,6 +230,17 @@ mod imp {
             })?;
             Ok(total)
         }
+
+        fn multipart_writer(&self, path: &str) -> Result<Option<Box<dyn MultipartWriter>>> {
+            let blob_name = self.cfg.blob_name(path);
+            let blob = self.container.blob_client(blob_name.clone());
+            let sink = AzurePartSink {
+                handle: self.rt.handle().clone(),
+                blob,
+                blob_name,
+            };
+            Ok(Some(Box::new(StreamingMultipartWriter::spawn(Box::new(sink)))))
+        }
     }
 }
 
@@ -188,5 +269,22 @@ mod tests {
     #[test]
     fn requires_container() {
         assert!(AzureConfig::from_params(&params("account: acct\n")).is_err());
+    }
+
+    // An emulator host lets leafmask target Azurite (or a self-hosted
+    // Azurite-compatible endpoint) instead of the public Azure cloud; the
+    // port defaults to Azurite's standard blob-service port when omitted.
+    #[test]
+    fn parses_emulator_host_and_port() {
+        let cfg = AzureConfig::from_params(&params(
+            "container: backups\nemulator_host: 127.0.0.1\nemulator_port: 12345\n",
+        ))
+        .unwrap();
+        assert_eq!(cfg.emulator_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(cfg.emulator_port, Some(12345));
+
+        // No emulator_host set -> None, unaffected (existing production path).
+        let cfg = AzureConfig::from_params(&params("account: acct\ncontainer: backups\n")).unwrap();
+        assert_eq!(cfg.emulator_host, None);
     }
 }
