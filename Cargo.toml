@@ -42,12 +42,13 @@ futures = { version = "0.3", optional = true }
 # vendored-openssl statically builds OpenSSL, so no system libssl is needed on
 # any target (portable release binaries and a slim runtime image).
 ssh2 = { version = "0.9", optional = true, features = ["vendored-openssl"] }
+testcontainers-modules = { version = "0.15", features = ["blocking"], optional = true }
 
 [features]
 default = []
 mongo = ["dep:mongodb", "dep:tokio"]
-s3 = ["dep:aws-sdk-s3", "dep:aws-config", "dep:tokio"]
-azure = ["dep:azure_storage", "dep:azure_storage_blobs", "dep:tokio", "dep:futures"]
+s3 = ["dep:aws-sdk-s3", "dep:aws-config", "dep:tokio", "dep:testcontainers-modules", "testcontainers-modules/minio"]
+azure = ["dep:azure_storage", "dep:azure_storage_blobs", "dep:tokio", "dep:futures", "dep:testcontainers-modules", "testcontainers-modules/azurite"]
 ssh = ["dep:ssh2"]
 # Everything: what the released binaries and Docker image are built with.
 full = ["mongo", "s3", "azure", "ssh"]
