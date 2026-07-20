@@ -161,7 +161,11 @@ impl MultipartWriter for StreamingMultipartWriter {
         // completion call is never given zero parts (both S3 and Azure
         // require at least one) — this covers a genuinely empty collection.
         if !last.is_empty() || self.schedule.parts_sent() == 0 {
-            self.send(last).map_err(|e| Error::Storage(e.to_string()))?;
+            // Best-effort: if the channel is already disconnected, the
+            // background thread has already exited (most likely from a part
+            // failure) — ignore this error and let join() below surface the
+            // real underlying cause instead of this generic one.
+            let _ = self.send(last);
         }
         if let Some(tx) = self.tx.borrow_mut().take() {
             let _ = tx.send(Msg::Finish);
@@ -338,6 +342,49 @@ mod tests {
 
         let result = writer.finish();
         assert!(result.is_err(), "expected finish() to surface the part failure");
+        assert!(*f.aborted.lock().unwrap());
+    }
+
+    // The literal "collection was completely empty" case: finish() must still
+    // send exactly one (empty) part when write() was never called at all —
+    // this is the scenario the "at least one part" requirement exists for
+    // (both S3 and Azure require at least one part/block to complete an
+    // upload).
+    #[test]
+    fn finish_without_any_write_sends_one_empty_part() {
+        let (f, sink) = fixture(None);
+        let writer: Box<dyn MultipartWriter> = Box::new(StreamingMultipartWriter::spawn(sink));
+        let total = writer.finish().unwrap();
+
+        assert_eq!(total, 0);
+        assert_eq!(f.parts.lock().unwrap().as_slice(), &[(1, Vec::new())]);
+        assert_eq!(
+            f.completed.lock().unwrap().as_deref(),
+            Some(&["token-1".to_string()][..])
+        );
+    }
+
+    // Regression test for the finish() error-masking fix above: when the
+    // background thread has already died from an earlier part failure, and
+    // finish() still has a non-empty trailing buffer to send, the real
+    // underlying error must surface — not a generic "thread ended early"
+    // message from the failed trailing send.
+    #[test]
+    fn finish_surfaces_real_error_even_when_trailing_send_fails() {
+        let (f, sink) = fixture(Some(1));
+        let mut writer: Box<dyn MultipartWriter> = Box::new(StreamingMultipartWriter::spawn(sink));
+        // One full part (fails on the background thread) plus a non-empty
+        // trailing remainder, so finish() has real bytes left to send after
+        // the background thread has already exited.
+        writer.write_all(&vec![b'x'; INITIAL_PART_SIZE]).unwrap();
+        writer.write_all(b"tail").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let err = writer.finish().unwrap_err();
+        assert!(
+            err.to_string().contains("simulated part failure"),
+            "expected the real sink error, got: {err}"
+        );
         assert!(*f.aborted.lock().unwrap());
     }
 }
