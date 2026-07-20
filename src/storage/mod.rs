@@ -48,6 +48,19 @@ pub struct DumpEntry {
     pub id: String,
 }
 
+/// A streaming, backgrounded write target: the implementation uploads
+/// buffered chunks on its own thread while the caller keeps writing,
+/// instead of blocking until the whole blob is assembled locally.
+pub trait MultipartWriter: std::io::Write + Send {
+    /// Flush the last partial chunk, wait for all in-flight uploads and the
+    /// final completion call, and return the total bytes written.
+    fn finish(self: Box<Self>) -> Result<u64>;
+    /// Called instead of [`Self::finish`] when the write failed partway
+    /// through (a transform error, a Mongo cursor error, ...) — cancels
+    /// whatever was started server-side so nothing is left dangling.
+    fn abort(&self);
+}
+
 /// The common storage interface, equivalent to the source product's
 /// `storages.Storager`. Paths are always `/`-separated and relative to the
 /// backend's configured root; the top-level path segment is the dump ID.
@@ -90,4 +103,51 @@ pub trait Storage: Send + Sync {
 
     /// Total byte size stored under `prefix`.
     fn size(&self, prefix: &str) -> Result<u64>;
+
+    /// Open a streaming multipart writer at `path`, for backends that can
+    /// overlap upload with writes. `None` by default — the caller falls
+    /// back to spool-then-[`Storage::put_file`]. S3 and Azure override
+    /// this.
+    fn multipart_writer(&self, _path: &str) -> Result<Option<Box<dyn MultipartWriter>>> {
+        Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoopStorage;
+    impl Storage for NoopStorage {
+        fn list_dumps(&self) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        fn get(&self, _path: &str) -> Result<Vec<u8>> {
+            Err(crate::Error::NotFound("n/a".into()))
+        }
+        fn put(&self, _path: &str, _data: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn exists(&self, _path: &str) -> Result<bool> {
+            Ok(false)
+        }
+        fn delete(&self, _prefix: &str) -> Result<()> {
+            Ok(())
+        }
+        fn list(&self, _prefix: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+        fn size(&self, _prefix: &str) -> Result<u64> {
+            Ok(0)
+        }
+    }
+
+    // Backends that don't override multipart_writer() must fall back to
+    // `None`, so CollectionDataWriter's spool-then-put_file path is
+    // unaffected for them (directory, ssh).
+    #[test]
+    fn multipart_writer_defaults_to_none() {
+        let storage = NoopStorage;
+        assert!(storage.multipart_writer("some/path").unwrap().is_none());
+    }
 }
