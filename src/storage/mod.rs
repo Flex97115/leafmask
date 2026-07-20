@@ -7,6 +7,7 @@
 
 pub mod azure;
 pub mod directory;
+#[cfg_attr(not(any(feature = "s3", feature = "azure")), allow(dead_code))]
 pub(crate) mod multipart;
 pub mod s3;
 pub mod selection;

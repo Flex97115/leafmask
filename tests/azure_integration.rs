@@ -3,13 +3,13 @@
 //! instance — Microsoft's official Azure Storage emulator.
 //!
 //! ```sh
-//! cargo test --features azure --test azure_integration
+//! cargo test --features "azure,integration-tests" --test azure_integration
 //! ```
 //!
 //! `testcontainers-modules` starts and tears down the Azurite container
 //! from inside the test itself — no manual `docker run` step needed, only
 //! a working local Docker daemon.
-#![cfg(feature = "azure")]
+#![cfg(all(feature = "azure", feature = "integration-tests"))]
 
 use std::collections::BTreeMap;
 
@@ -18,6 +18,7 @@ use leafmask::dump::{list_metadata, read_collection_full, Dump, DumpOptions};
 use leafmask::hash::HashEngine;
 use leafmask::mongo::{CollectionData, InMemoryMongo};
 use leafmask::storage::azure::{AzureConfig, AzureStorage};
+use leafmask::storage::Storage;
 use leafmask::transform::Registry;
 use sha2::{Digest, Sha256};
 use testcontainers_modules::azurite::{Azurite, BLOB_PORT};
@@ -122,6 +123,18 @@ fn dump_round_trips_through_real_azurite_block_upload() {
         options,
     };
     let meta = dump.run(chrono::Utc::now()).expect("dump against Azurite");
+
+    // The data blob must exceed one part's worth of bytes (8 MiB —
+    // StreamingMultipartWriter's INITIAL_PART_SIZE in
+    // src/storage/multipart.rs) so this test actually proves multi-part
+    // reassembly, not just that the multipart code path was reached once.
+    let data_size = storage
+        .size(&format!("{}/data/app/users.bson.gz", meta.id))
+        .unwrap();
+    assert!(
+        data_size > 8 * 1024 * 1024,
+        "expected the data blob to span more than one 8 MiB part, got {data_size} bytes — the test's document padding may have become too compressible"
+    );
 
     let full = read_collection_full(&storage, &meta.id, "app", "users").unwrap();
     assert_eq!(full.documents.len(), 200_000);

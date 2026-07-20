@@ -2,13 +2,13 @@
 //! writer, run against a real (containerized) MinIO instance.
 //!
 //! ```sh
-//! cargo test --features s3 --test s3_integration
+//! cargo test --features "s3,integration-tests" --test s3_integration
 //! ```
 //!
 //! `testcontainers-modules` starts and tears down the MinIO container from
 //! inside the test itself — no manual `docker run` step needed, only a
 //! working local Docker daemon.
-#![cfg(feature = "s3")]
+#![cfg(all(feature = "s3", feature = "integration-tests"))]
 
 use std::collections::BTreeMap;
 
@@ -17,6 +17,7 @@ use leafmask::dump::{list_metadata, read_collection_full, Dump, DumpOptions};
 use leafmask::hash::HashEngine;
 use leafmask::mongo::{CollectionData, InMemoryMongo};
 use leafmask::storage::s3::{S3Config, S3Storage};
+use leafmask::storage::Storage;
 use leafmask::transform::Registry;
 use sha2::{Digest, Sha256};
 use testcontainers_modules::{minio::MinIO, testcontainers::runners::SyncRunner};
@@ -124,6 +125,18 @@ fn dump_round_trips_through_real_minio_multipart_upload() {
         options,
     };
     let meta = dump.run(chrono::Utc::now()).expect("dump against MinIO");
+
+    // The data blob must exceed one part's worth of bytes (8 MiB —
+    // StreamingMultipartWriter's INITIAL_PART_SIZE in
+    // src/storage/multipart.rs) so this test actually proves multi-part
+    // reassembly, not just that the multipart code path was reached once.
+    let data_size = storage
+        .size(&format!("{}/data/app/users.bson.gz", meta.id))
+        .unwrap();
+    assert!(
+        data_size > 8 * 1024 * 1024,
+        "expected the data blob to span more than one 8 MiB part, got {data_size} bytes — the test's document padding may have become too compressible"
+    );
 
     let full = read_collection_full(&storage, &meta.id, "app", "users").unwrap();
     assert_eq!(full.documents.len(), 200_000);
