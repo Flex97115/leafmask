@@ -721,9 +721,13 @@ mod tests {
         struct TrackingMultipartWriter {
             data: Arc<Mutex<Vec<u8>>>,
             aborted: Arc<Mutex<bool>>,
+            wrote_after_abort: Arc<Mutex<bool>>,
         }
         impl Write for TrackingMultipartWriter {
             fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                if *self.aborted.lock().unwrap() {
+                    *self.wrote_after_abort.lock().unwrap() = true;
+                }
                 self.data.lock().unwrap().extend_from_slice(buf);
                 Ok(buf.len())
             }
@@ -742,6 +746,7 @@ mod tests {
 
         struct TrackingStorage {
             aborted: Arc<Mutex<bool>>,
+            wrote_after_abort: Arc<Mutex<bool>>,
         }
         impl crate::storage::Storage for TrackingStorage {
             fn list_dumps(&self) -> Result<Vec<String>> {
@@ -769,16 +774,22 @@ mod tests {
                 Ok(Some(Box::new(TrackingMultipartWriter {
                     data: Arc::new(Mutex::new(Vec::new())),
                     aborted: self.aborted.clone(),
+                    wrote_after_abort: self.wrote_after_abort.clone(),
                 })))
             }
         }
 
         // Gzip + multipart: dropped without finish() must call abort()
-        // exactly once, with no panic from a trailer write landing on an
-        // already-aborted resource.
+        // exactly once, and the gzip trailer write (which flate2's own
+        // Drop impl would otherwise attempt) must land BEFORE abort() is
+        // called, not after — a write reaching the sink after abort()
+        // means cleanup ran on a resource GzEncoder was still going to
+        // write into.
         let aborted = Arc::new(Mutex::new(false));
+        let wrote_after_abort = Arc::new(Mutex::new(false));
         let storage = TrackingStorage {
             aborted: aborted.clone(),
+            wrote_after_abort: wrote_after_abort.clone(),
         };
         let writer = CollectionDataWriter::create(
             &storage,
@@ -794,12 +805,17 @@ mod tests {
             *aborted.lock().unwrap(),
             "expected abort() on gzip+multipart drop"
         );
+        assert!(
+            !*wrote_after_abort.lock().unwrap(),
+            "gzip trailer was written after abort() — Drop cleaned up before the trailer landed"
+        );
 
         // Plain + multipart: dropped without finish() must also call
         // abort() (no GzEncoder involved at all here).
         let aborted2 = Arc::new(Mutex::new(false));
         let storage2 = TrackingStorage {
             aborted: aborted2.clone(),
+            wrote_after_abort: Arc::new(Mutex::new(false)),
         };
         let writer2 = CollectionDataWriter::create(
             &storage2,
