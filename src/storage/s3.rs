@@ -427,7 +427,9 @@ mod imp {
                 key,
                 upload_id,
             };
-            Ok(Some(Box::new(StreamingMultipartWriter::spawn(Box::new(sink)))))
+            Ok(Some(Box::new(StreamingMultipartWriter::spawn(Box::new(
+                sink,
+            )))))
         }
     }
 }

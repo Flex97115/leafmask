@@ -93,10 +93,9 @@ mod imp {
                     .account
                     .clone()
                     .ok_or_else(|| Error::Storage("azure storage requires an 'account'".into()))?;
-                let key = cfg
-                    .access_key
-                    .clone()
-                    .ok_or_else(|| Error::Storage("azure storage requires an 'access_key'".into()))?;
+                let key = cfg.access_key.clone().ok_or_else(|| {
+                    Error::Storage("azure storage requires an 'access_key'".into())
+                })?;
                 let creds = StorageCredentials::access_key(account.clone(), key);
                 ClientBuilder::new(account, creds).container_client(cfg.container.clone())
             };
@@ -239,7 +238,9 @@ mod imp {
                 blob,
                 blob_name,
             };
-            Ok(Some(Box::new(StreamingMultipartWriter::spawn(Box::new(sink)))))
+            Ok(Some(Box::new(StreamingMultipartWriter::spawn(Box::new(
+                sink,
+            )))))
         }
     }
 }

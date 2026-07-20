@@ -260,7 +260,10 @@ mod tests {
         let total = writer.finish().unwrap();
 
         assert_eq!(total, 5);
-        assert_eq!(f.parts.lock().unwrap().as_slice(), &[(1, b"hello".to_vec())]);
+        assert_eq!(
+            f.parts.lock().unwrap().as_slice(),
+            &[(1, b"hello".to_vec())]
+        );
         assert_eq!(
             f.completed.lock().unwrap().as_deref(),
             Some(&["token-1".to_string()][..])
@@ -343,7 +346,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         let result = writer.finish();
-        assert!(result.is_err(), "expected finish() to surface the part failure");
+        assert!(
+            result.is_err(),
+            "expected finish() to surface the part failure"
+        );
         assert!(*f.aborted.lock().unwrap());
     }
 
