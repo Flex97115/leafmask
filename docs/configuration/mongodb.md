@@ -63,6 +63,29 @@ those accounts can read and write is exactly what Leafmask can do. Grant the
 dump account read access to the source, and the restore account write access to
 the target.
 
+!!! tip "Use a read-only user for dumps"
+    `dump`, `list-transformers`, and `validate --data` only ever read: they call
+    `listDatabases`, `listCollections`, `listIndexes`, and `find` against the
+    source, and never write to it. Point the `mongodb.uri` used for these
+    commands at an account with the built-in **`read`** role on each database to
+    dump (or **`readAnyDatabase`** if you want Leafmask to auto-discover every
+    database). Reserve a separate, write-capable account for `restore`.
+
+    ```js
+    // On the source deployment, scoped to the databases Leafmask should dump.
+    db.getSiblingDB("admin").createUser({
+      user: "leafmask_dump",
+      pwd: "change-me",
+      roles: [
+        { role: "read", db: "shop" },
+        { role: "read", db: "billing" },
+      ],
+    });
+    ```
+
+    A read-only account can't be used for `restore` — `ensureCollection`,
+    `insert`, and `createIndex` all require write access on the target.
+
 !!! note "Consistency"
     Reads use a plain query. Point-in-time snapshot consistency across a dump
     requires a **replica set** (a standalone `mongod` does not support snapshot

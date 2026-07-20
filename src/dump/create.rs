@@ -9,6 +9,8 @@
 //! A dump requires `common.tmp_dir`; without it the command fails fast.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use bson::Document;
 use chrono::{DateTime, Utc};
@@ -35,7 +37,8 @@ pub struct DumpOptions {
     pub exclude_collections: Vec<String>,
     /// Compress collection data with gzip.
     pub gzip: bool,
-    /// Number of parallel jobs (accepted; execution is sequential here).
+    /// Number of collections to dump concurrently. `0` or `1` (the default)
+    /// dumps sequentially.
     pub parallel_jobs: usize,
     /// Exclude index definitions and collection options from the dump.
     pub no_indexes: bool,
@@ -71,6 +74,20 @@ pub struct Dump<'a> {
     pub options: DumpOptions,
 }
 
+/// One collection to dump, with its position in the source's enumeration
+/// order — preserved as `restore_order` regardless of which worker thread
+/// (or completion order) actually processes it.
+struct WorkItem {
+    db_index: usize,
+    restore_order: u32,
+    db: String,
+    coll: String,
+}
+
+/// A dumped collection's total bytes written (data blob + structure blob)
+/// and its TOC entry.
+type DumpItemResult = Result<(u64, CollectionToc)>;
+
 impl<'a> Dump<'a> {
     /// Run the dump, stamping it with an id derived from `created_at`.
     pub fn run(&self, created_at: DateTime<Utc>) -> Result<DumpMetadata> {
@@ -84,55 +101,64 @@ impl<'a> Dump<'a> {
         };
 
         let id = created_at.format("%Y%m%dT%H%M%SZ").to_string();
-        let mut databases = Vec::new();
-        let mut total_size = 0u64;
 
+        // Enumerate databases and collections up front, in source order —
+        // cheap (just names), and it lets dumping itself be parallelized
+        // without disturbing the deterministic TOC order below.
+        let mut db_names = Vec::new();
+        let mut items = Vec::new();
         for db in self.source.databases()? {
             if !self.options.include_db(&db) {
                 continue;
             }
             log::info!("dumping database {db}");
-            let mut collections = Vec::new();
-            let mut order = 0u32;
+            let db_index = db_names.len();
+            let mut restore_order = 0u32;
             for coll in self.source.collections(&db)? {
                 if !self.options.include_collection(&coll) {
                     continue;
                 }
-                let (count, size) = self.dump_collection(&id, tmp_dir, &db, &coll)?;
-                total_size += size;
-
-                let structure = if self.options.no_indexes {
-                    CollectionStructure::default()
-                } else {
-                    self.source.read_structure(&db, &coll)?
-                };
-                let toc = CollectionToc {
-                    name: coll.clone(),
-                    document_count: count,
-                    indexes: structure.indexes.iter().map(|i| i.name.clone()).collect(),
-                    restore_order: order,
-                };
-                order += 1;
-
-                total_size += write_collection_meta(
-                    self.storage,
-                    &id,
-                    &CollectionMeta {
-                        database: db.clone(),
-                        collection: coll.clone(),
-                        document_count: count,
-                        indexes: structure.indexes,
-                        validator: structure.validator,
-                        options: structure.options,
-                    },
-                )?;
-                collections.push(toc);
+                items.push(WorkItem {
+                    db_index,
+                    restore_order,
+                    db: db.clone(),
+                    coll,
+                });
+                restore_order += 1;
             }
-            databases.push(DatabaseToc {
-                name: db,
-                collections,
-            });
+            db_names.push(db);
         }
+
+        let jobs = self.options.parallel_jobs.max(1);
+        let results: Vec<Option<DumpItemResult>> = if jobs <= 1 || items.len() <= 1 {
+            items
+                .iter()
+                .map(|item| Some(self.dump_item(&id, tmp_dir, item)))
+                .collect()
+        } else {
+            self.dump_items_parallel(&id, tmp_dir, &items, jobs)
+        };
+
+        let mut total_size = 0u64;
+        let mut collections_by_db: Vec<Vec<CollectionToc>> = vec![Vec::new(); db_names.len()];
+        for (item, result) in items.iter().zip(results) {
+            match result {
+                Some(Ok((size, toc))) => {
+                    total_size += size;
+                    collections_by_db[item.db_index].push(toc);
+                }
+                Some(Err(e)) => return Err(e),
+                // Never claimed: dispatch stopped after an earlier item (in
+                // whatever order threads picked them up) failed.
+                None => continue,
+            }
+        }
+
+        let databases = db_names
+            .into_iter()
+            .zip(collections_by_db)
+            .map(|(name, collections)| DatabaseToc { name, collections })
+            .collect();
 
         let meta = DumpMetadata {
             id,
@@ -143,6 +169,81 @@ impl<'a> Dump<'a> {
         };
         write_metadata(self.storage, &meta)?;
         Ok(meta)
+    }
+
+    /// Dump `items` across `jobs` worker threads pulling from a shared
+    /// cursor. On the first failure, no new item is claimed, but items
+    /// already claimed run to completion — so a mid-dump error never cuts
+    /// off a spool file or upload in progress. Returns one slot per item,
+    /// `None` where dispatch stopped before that item was ever claimed.
+    fn dump_items_parallel(
+        &self,
+        id: &str,
+        tmp_dir: &str,
+        items: &[WorkItem],
+        jobs: usize,
+    ) -> Vec<Option<DumpItemResult>> {
+        let jobs = jobs.min(items.len());
+        let results: Vec<Mutex<Option<DumpItemResult>>> =
+            (0..items.len()).map(|_| Mutex::new(None)).collect();
+        let next = AtomicUsize::new(0);
+        let stop = AtomicBool::new(false);
+
+        std::thread::scope(|scope| {
+            for _ in 0..jobs {
+                scope.spawn(|| loop {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= items.len() {
+                        break;
+                    }
+                    let result = self.dump_item(id, tmp_dir, &items[i]);
+                    if result.is_err() {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    *results[i].lock().unwrap() = Some(result);
+                });
+            }
+        });
+
+        results
+            .into_iter()
+            .map(|m| m.into_inner().unwrap())
+            .collect()
+    }
+
+    /// Dump one collection's data and structure.
+    fn dump_item(&self, id: &str, tmp_dir: &str, item: &WorkItem) -> DumpItemResult {
+        let (db, coll) = (item.db.as_str(), item.coll.as_str());
+        let (count, mut size) = self.dump_collection(id, tmp_dir, db, coll)?;
+
+        let structure = if self.options.no_indexes {
+            CollectionStructure::default()
+        } else {
+            self.source.read_structure(db, coll)?
+        };
+        let toc = CollectionToc {
+            name: coll.to_string(),
+            document_count: count,
+            indexes: structure.indexes.iter().map(|i| i.name.clone()).collect(),
+            restore_order: item.restore_order,
+        };
+
+        size += write_collection_meta(
+            self.storage,
+            id,
+            &CollectionMeta {
+                database: db.to_string(),
+                collection: coll.to_string(),
+                document_count: count,
+                indexes: structure.indexes,
+                validator: structure.validator,
+                options: structure.options,
+            },
+        )?;
+        Ok((size, toc))
     }
 
     /// Stream one collection's documents from the source into storage —
@@ -449,5 +550,133 @@ mod tests {
         for doc in &full.documents {
             assert!(doc.get_str("email").unwrap().chars().all(|c| c == '*'));
         }
+    }
+
+    fn source_with_n_collections(n: usize) -> InMemoryMongo {
+        let m = InMemoryMongo::new();
+        for i in 0..n {
+            let documents = (0..=i as i64)
+                .map(|id| {
+                    let mut d = Document::new();
+                    d.insert("_id", id);
+                    d
+                })
+                .collect();
+            m.seed(CollectionData {
+                database: "app".into(),
+                collection: format!("c{i}"),
+                documents,
+                ..Default::default()
+            });
+        }
+        m
+    }
+
+    // Acceptance: `--jobs` (parallel_jobs > 1) dumps every collection and
+    // produces byte-for-byte the same metadata as a sequential dump — same
+    // document counts, same restore_order (source enumeration order, not
+    // completion order), same total size.
+    #[test]
+    fn jobs_parallel_dump_matches_sequential() {
+        let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
+
+        let sequential_dir = tempfile::tempdir().unwrap();
+        let s1 = DirectoryStorage::new(sequential_dir.path()).unwrap();
+        let m1 = source_with_n_collections(5);
+        let opts1 = DumpOptions {
+            tmp_dir: Some(std::env::temp_dir().display().to_string()),
+            parallel_jobs: 1,
+            ..Default::default()
+        };
+        let meta1 = dump(&s1, &m1, &r, &e, opts1)
+            .run(at("2026-07-18T12:00:00Z"))
+            .unwrap();
+
+        let parallel_dir = tempfile::tempdir().unwrap();
+        let s2 = DirectoryStorage::new(parallel_dir.path()).unwrap();
+        let m2 = source_with_n_collections(5);
+        // More jobs than collections: exercises the "fewer items than
+        // threads" path too.
+        let opts2 = DumpOptions {
+            tmp_dir: Some(std::env::temp_dir().display().to_string()),
+            parallel_jobs: 8,
+            ..Default::default()
+        };
+        let meta2 = dump(&s2, &m2, &r, &e, opts2)
+            .run(at("2026-07-18T12:00:00Z"))
+            .unwrap();
+
+        assert_eq!(meta1, meta2);
+        assert_eq!(meta1.databases[0].collections.len(), 5);
+        for (i, coll) in meta1.databases[0].collections.iter().enumerate() {
+            assert_eq!(coll.name, format!("c{i}"));
+            assert_eq!(coll.restore_order, i as u32);
+            assert_eq!(coll.document_count, i as u64 + 1);
+        }
+    }
+
+    // A source that always fails on one specific collection, to exercise the
+    // parallel dump's error path.
+    struct FailingSource;
+
+    impl MongoSource for FailingSource {
+        fn databases(&self) -> crate::error::Result<Vec<String>> {
+            Ok(vec!["app".into()])
+        }
+        fn collections(&self, _db: &str) -> crate::error::Result<Vec<String>> {
+            Ok((0..5).map(|i| format!("c{i}")).collect())
+        }
+        fn read_collection(&self, _db: &str, _coll: &str) -> crate::error::Result<CollectionData> {
+            panic!("dump must not materialize whole collections");
+        }
+        fn read_structure(
+            &self,
+            _db: &str,
+            _coll: &str,
+        ) -> crate::error::Result<CollectionStructure> {
+            Ok(CollectionStructure::default())
+        }
+        fn stream_documents(
+            &self,
+            _db: &str,
+            coll: &str,
+            _filter: Option<&Document>,
+            f: &mut dyn FnMut(Document) -> crate::error::Result<()>,
+        ) -> crate::error::Result<()> {
+            if coll == "c3" {
+                return Err(Error::Mongo("boom".into()));
+            }
+            let mut d = Document::new();
+            d.insert("_id", 1i64);
+            f(d)
+        }
+    }
+
+    // Acceptance: a failure in one collection during a parallel dump still
+    // surfaces as an error from `run`, and every spool file — including ones
+    // from collections that finished successfully alongside the failure — is
+    // cleaned up rather than left behind in tmp_dir.
+    #[test]
+    fn jobs_parallel_dump_propagates_error_and_cleans_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = DirectoryStorage::new(dir.path()).unwrap();
+        let (r, e) = (Registry::with_builtins(), HashEngine::new("s"));
+        let tmp = tempfile::tempdir().unwrap();
+        let d = Dump {
+            storage: &s,
+            source: &FailingSource,
+            registry: &r,
+            engine: &e,
+            plan: None,
+            filters: BTreeMap::new(),
+            options: DumpOptions {
+                tmp_dir: Some(tmp.path().display().to_string()),
+                parallel_jobs: 4,
+                ..Default::default()
+            },
+        };
+        let err = d.run(at("2026-07-18T12:00:00Z")).unwrap_err();
+        assert!(err.to_string().contains("boom"), "{err}");
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
     }
 }

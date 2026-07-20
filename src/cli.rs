@@ -36,7 +36,7 @@ pub struct DumpArgs {
     /// Skip these collections (repeatable).
     #[arg(long = "exclude-collection")]
     pub exclude_collection: Vec<String>,
-    /// Number of parallel jobs (accepted; execution is sequential).
+    /// Number of collections to dump concurrently.
     #[arg(long, default_value_t = 1)]
     pub jobs: usize,
     /// Exclude index definitions and collection options.

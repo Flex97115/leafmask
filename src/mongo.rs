@@ -36,7 +36,9 @@ pub struct CollectionStructure {
 }
 
 /// A read side: enumerate and read collections (for dump / validate).
-pub trait MongoSource {
+///
+/// `Sync` so a dump can share one source across worker threads (`--jobs`).
+pub trait MongoSource: Sync {
     fn databases(&self) -> Result<Vec<String>>;
     fn collections(&self, database: &str) -> Result<Vec<String>>;
     fn read_collection(&self, database: &str, collection: &str) -> Result<CollectionData>;

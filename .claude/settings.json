@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test*)",
+      "Bash(source \"$HOME/.cargo/env\")",
+      "Bash(export PATH=\"$HOME/.cargo/bin:$PATH\")",
+      "Bash(cargo build*)",
+      "Bash(cargo fmt --check)",
+      "Bash(cargo check*)",
+      "Bash(cargo clippy*)"
+    ]
+  }
+}

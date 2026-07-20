@@ -72,6 +72,37 @@ dump:
     residence_temperature: "created_at >= '2026-07-17T00:00:00Z' and created_at < '2026-07-18T00:00:00Z'"
 ```
 
+### Dynamic date windows
+
+The condition language has no relative-date function (no `now()`, no date
+arithmetic) — it only compares against literal values. For a rolling window
+like "the last 30 days" or "last month", compute the boundary in the shell and
+inject it with [environment
+interpolation](index.md#environment-interpolation), the same mechanism used to
+keep credentials out of the config file:
+
+```yaml
+dump:
+  subset_conds:
+    residence_temperature: "created_at >= '${SUBSET_SINCE}'"
+```
+
+```sh
+export SUBSET_SINCE=$(date -u -v-30d +%Y-%m-%dT%H:%M:%SZ)             # macOS/BSD date: last 30 days
+export SUBSET_SINCE=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)   # GNU/Linux date: last 30 days
+export SUBSET_SINCE=$(date -u -v1d -v-1m +%Y-%m-%dT00:00:00Z)         # macOS/BSD date: start of last month
+export SUBSET_SINCE=$(date -u -d "$(date +%Y-%m-01) -1 month" +%Y-%m-%dT%H:%M:%SZ) # GNU/Linux: start of last month
+
+leafmask --config leafmask.yaml dump
+```
+
+!!! warning "An unset variable filters nothing, silently"
+    An undefined `${SUBSET_SINCE}` interpolates to an empty string, not an
+    error. Comparing a `datetime` field against `''` with `>=` matches **every**
+    document — BSON's type-ordering ranks `Date` above `String`, so the
+    condition is always true instead of always false. Echo the variable (or run
+    the script with `set -u`) before dumping to make sure it's actually set.
+
 ## Cyclic references
 
 Self-references and cycles (A → B → A) are handled safely — a visited-set bounds
