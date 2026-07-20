@@ -256,7 +256,9 @@ impl<'a> Dump<'a> {
     /// spooling all happen inline, so memory stays bounded regardless of the
     /// collection's size. Returns (documents written, blob bytes).
     fn dump_collection(&self, id: &str, tmp_dir: &str, db: &str, coll: &str) -> Result<(u64, u64)> {
-        let mut writer = CollectionDataWriter::create(tmp_dir, db, coll, self.options.gzip)?;
+        let path = format!("{id}/{}", data_path(db, coll, self.options.gzip));
+        let mut writer =
+            CollectionDataWriter::create(self.storage, &path, tmp_dir, db, coll, self.options.gzip)?;
         let mut read = 0u64;
         self.source
             .stream_documents(db, coll, self.filters.get(coll), &mut |doc| {
@@ -278,8 +280,7 @@ impl<'a> Dump<'a> {
             })?;
 
         let count = writer.count();
-        let path = format!("{id}/{}", data_path(db, coll, self.options.gzip));
-        let size = writer.finish(self.storage, &path)?;
+        let size = writer.finish(self.storage)?;
         if count != read {
             log::info!("  {db}.{coll}: {count} of {read} documents");
         } else {

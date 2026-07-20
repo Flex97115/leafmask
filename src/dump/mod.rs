@@ -298,56 +298,101 @@ pub fn open_document_reader(
 }
 
 /// Streaming writer for a collection's data blob: documents are appended one
-/// at a time (optionally gzip-compressed) to a spool file under `tmp_dir`,
-/// then uploaded to storage in one pass. Memory stays bounded per document.
+/// at a time (optionally gzip-compressed). Backends that support it (S3,
+/// Azure) stream straight into a backgrounded multipart upload, so the
+/// upload overlaps with whatever is still being written; other backends
+/// fall back to a local spool file, uploaded in one pass once writing is
+/// done. Memory stays bounded per document either way.
 pub struct CollectionDataWriter {
-    spool: std::path::PathBuf,
-    inner: Option<SpoolWriter>,
+    inner: Option<SinkWriter>,
     count: u64,
+    target_path: String,
 }
 
-enum SpoolWriter {
-    Plain(std::io::BufWriter<std::fs::File>),
-    Gzip(flate2::write::GzEncoder<std::io::BufWriter<std::fs::File>>),
+enum RawSink {
+    Spool {
+        path: std::path::PathBuf,
+        file: std::io::BufWriter<std::fs::File>,
+    },
+    Multipart(Box<dyn crate::storage::MultipartWriter>),
+}
+
+impl Write for RawSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        match self {
+            RawSink::Spool { file, .. } => file.write(buf),
+            RawSink::Multipart(w) => w.write(buf),
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self {
+            RawSink::Spool { file, .. } => file.flush(),
+            RawSink::Multipart(w) => w.flush(),
+        }
+    }
+}
+
+enum SinkWriter {
+    Plain(RawSink),
+    Gzip(flate2::write::GzEncoder<RawSink>),
 }
 
 impl CollectionDataWriter {
-    /// Open a spool file for `db`.`collection` under `tmp_dir` (created if
-    /// missing).
-    pub fn create(tmp_dir: &str, db: &str, collection: &str, gzip: bool) -> Result<Self> {
-        std::fs::create_dir_all(tmp_dir)
-            .map_err(|e| Error::Storage(format!("cannot create tmp_dir {tmp_dir}: {e}")))?;
-        // pid + per-process counter keeps concurrent dumps (and parallel
-        // tests) from ever sharing a spool file.
-        static SPOOL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let seq = SPOOL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let spool = std::path::Path::new(tmp_dir).join(format!(
-            "leafmask-{}-{seq}-{db}-{collection}.spool",
-            std::process::id()
-        ));
-        let file = std::fs::File::create(&spool)
-            .map_err(|e| Error::Storage(format!("cannot create spool file: {e}")))?;
-        let buf = std::io::BufWriter::new(file);
+    /// Open a writer for `db`.`collection`, targeting `path` in `storage`.
+    /// Uses a streaming multipart upload when `storage` supports it
+    /// ([`Storage::multipart_writer`]); otherwise spools to a local file
+    /// under `tmp_dir` (created if missing) and uploads it whole in
+    /// [`Self::finish`].
+    pub fn create(
+        storage: &dyn Storage,
+        path: &str,
+        tmp_dir: &str,
+        db: &str,
+        collection: &str,
+        gzip: bool,
+    ) -> Result<Self> {
+        let raw = match storage.multipart_writer(path)? {
+            Some(w) => RawSink::Multipart(w),
+            None => {
+                std::fs::create_dir_all(tmp_dir)
+                    .map_err(|e| Error::Storage(format!("cannot create tmp_dir {tmp_dir}: {e}")))?;
+                // pid + per-process counter keeps concurrent dumps (and
+                // parallel tests) from ever sharing a spool file.
+                static SPOOL_SEQ: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(0);
+                let seq = SPOOL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let spool_path = std::path::Path::new(tmp_dir).join(format!(
+                    "leafmask-{}-{seq}-{db}-{collection}.spool",
+                    std::process::id()
+                ));
+                let file = std::fs::File::create(&spool_path)
+                    .map_err(|e| Error::Storage(format!("cannot create spool file: {e}")))?;
+                RawSink::Spool {
+                    path: spool_path,
+                    file: std::io::BufWriter::new(file),
+                }
+            }
+        };
         let inner = if gzip {
-            SpoolWriter::Gzip(flate2::write::GzEncoder::new(
-                buf,
+            SinkWriter::Gzip(flate2::write::GzEncoder::new(
+                raw,
                 flate2::Compression::default(),
             ))
         } else {
-            SpoolWriter::Plain(buf)
+            SinkWriter::Plain(raw)
         };
         Ok(CollectionDataWriter {
-            spool,
             inner: Some(inner),
             count: 0,
+            target_path: path.to_string(),
         })
     }
 
     /// Append one document to the blob.
     pub fn write_document(&mut self, doc: &Document) -> Result<()> {
         let w: &mut dyn Write = match self.inner.as_mut().expect("writer not finished") {
-            SpoolWriter::Plain(w) => w,
-            SpoolWriter::Gzip(w) => w,
+            SinkWriter::Plain(w) => w,
+            SinkWriter::Gzip(w) => w,
         };
         doc.to_writer(w)
             .map_err(|e| Error::Storage(e.to_string()))?;
@@ -360,29 +405,51 @@ impl CollectionDataWriter {
         self.count
     }
 
-    /// Finish the blob and upload it to `path` in storage. Returns the blob's
-    /// size in bytes. The spool file is removed afterwards.
-    pub fn finish(mut self, storage: &dyn Storage, path: &str) -> Result<u64> {
-        let mut buf = match self.inner.take().expect("writer already finished") {
-            SpoolWriter::Plain(w) => w,
-            SpoolWriter::Gzip(enc) => enc.finish().map_err(|e| Error::Storage(e.to_string()))?,
+    /// Finish the blob. For the multipart path this waits for the upload to
+    /// complete; for the spool-file path this uploads the finished local
+    /// file to `storage` (removed afterwards). Returns the blob's size in
+    /// bytes.
+    pub fn finish(mut self, storage: &dyn Storage) -> Result<u64> {
+        let raw = match self.inner.take().expect("writer already finished") {
+            SinkWriter::Plain(raw) => raw,
+            SinkWriter::Gzip(enc) => enc.finish().map_err(|e| Error::Storage(e.to_string()))?,
         };
-        buf.flush().map_err(|e| Error::Storage(e.to_string()))?;
-        drop(buf);
-        let size = std::fs::metadata(&self.spool)
-            .map_err(|e| Error::Storage(e.to_string()))?
-            .len();
-        storage.put_file(path, &self.spool)?;
-        let _ = std::fs::remove_file(&self.spool);
-        Ok(size)
+        match raw {
+            RawSink::Spool {
+                path: spool_path,
+                mut file,
+            } => {
+                file.flush().map_err(|e| Error::Storage(e.to_string()))?;
+                drop(file);
+                let size = std::fs::metadata(&spool_path)
+                    .map_err(|e| Error::Storage(e.to_string()))?
+                    .len();
+                storage.put_file(&self.target_path, &spool_path)?;
+                let _ = std::fs::remove_file(&spool_path);
+                Ok(size)
+            }
+            RawSink::Multipart(w) => w.finish(),
+        }
     }
 }
 
 impl Drop for CollectionDataWriter {
     fn drop(&mut self) {
-        // A writer dropped without finish() (error path) leaves no spool behind.
-        if self.inner.take().is_some() {
-            let _ = std::fs::remove_file(&self.spool);
+        // A writer dropped without finish() (error path): clean up
+        // whatever was started rather than leaving a local spool file or a
+        // dangling multipart upload behind.
+        match self.inner.take() {
+            Some(SinkWriter::Plain(RawSink::Spool { path, .. })) => {
+                let _ = std::fs::remove_file(&path);
+            }
+            Some(SinkWriter::Plain(RawSink::Multipart(w))) => w.abort(),
+            Some(SinkWriter::Gzip(enc)) => match enc.get_ref() {
+                RawSink::Spool { path, .. } => {
+                    let _ = std::fs::remove_file(path);
+                }
+                RawSink::Multipart(w) => w.abort(),
+            },
+            None => {}
         }
     }
 }
@@ -538,6 +605,82 @@ mod tests {
             assert_eq!(r.next_batch(2).unwrap().len(), 1);
             assert!(r.next_batch(2).unwrap().is_empty());
         }
+    }
+
+    // When the storage backend offers a multipart writer, CollectionDataWriter
+    // must stream straight into it instead of spooling to a local file first
+    // — proven here by pointing tmp_dir at a path that's never created.
+    #[test]
+    fn create_uses_multipart_writer_when_storage_offers_one() {
+        use crate::storage::MultipartWriter;
+        use std::sync::{Arc, Mutex};
+
+        struct FakeMultipartWriter(Arc<Mutex<Vec<u8>>>);
+        impl Write for FakeMultipartWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl MultipartWriter for FakeMultipartWriter {
+            fn finish(self: Box<Self>) -> Result<u64> {
+                Ok(self.0.lock().unwrap().len() as u64)
+            }
+            fn abort(&self) {}
+        }
+
+        struct FakeMultipartStorage {
+            uploaded: Arc<Mutex<Vec<u8>>>,
+        }
+        impl crate::storage::Storage for FakeMultipartStorage {
+            fn list_dumps(&self) -> Result<Vec<String>> {
+                unimplemented!()
+            }
+            fn get(&self, _path: &str) -> Result<Vec<u8>> {
+                unimplemented!()
+            }
+            fn put(&self, _path: &str, _data: &[u8]) -> Result<()> {
+                unimplemented!()
+            }
+            fn exists(&self, _path: &str) -> Result<bool> {
+                unimplemented!()
+            }
+            fn delete(&self, _prefix: &str) -> Result<()> {
+                unimplemented!()
+            }
+            fn list(&self, _prefix: &str) -> Result<Vec<String>> {
+                unimplemented!()
+            }
+            fn size(&self, _prefix: &str) -> Result<u64> {
+                unimplemented!()
+            }
+            fn multipart_writer(&self, _path: &str) -> Result<Option<Box<dyn MultipartWriter>>> {
+                Ok(Some(Box::new(FakeMultipartWriter(self.uploaded.clone()))))
+            }
+        }
+
+        let uploaded = Arc::new(Mutex::new(Vec::new()));
+        let storage = FakeMultipartStorage {
+            uploaded: uploaded.clone(),
+        };
+
+        let mut writer = CollectionDataWriter::create(
+            &storage,
+            "d1/data/app/users.bson",
+            "/does/not/exist/unused-when-multipart",
+            "app",
+            "users",
+            false,
+        )
+        .unwrap();
+        writer.write_document(&users(1).documents[0]).unwrap();
+        let size = writer.finish(&storage).unwrap();
+
+        assert_eq!(size, uploaded.lock().unwrap().len() as u64);
+        assert!(!uploaded.lock().unwrap().is_empty());
     }
 
     fn meta(id: &str, status: DumpStatus, created: &str) -> DumpMetadata {
