@@ -443,12 +443,35 @@ impl Drop for CollectionDataWriter {
                 let _ = std::fs::remove_file(&path);
             }
             Some(SinkWriter::Plain(RawSink::Multipart(w))) => w.abort(),
-            Some(SinkWriter::Gzip(enc)) => match enc.get_ref() {
-                RawSink::Spool { path, .. } => {
-                    let _ = std::fs::remove_file(path);
+            Some(SinkWriter::Gzip(enc)) => {
+                // GzEncoder's own Drop impl unconditionally attempts a trailer
+                // write if it was never consumed via finish() — get_ref() alone
+                // doesn't prevent that. So call finish() ourselves here: it lets
+                // that trailer write land on the still-valid resource, and gives
+                // us the RawSink back to clean up properly. Capture the spool
+                // path first in case finish() itself fails (e.g. disk error) and
+                // never returns the RawSink at all.
+                let spool_path = match enc.get_ref() {
+                    RawSink::Spool { path, .. } => Some(path.clone()),
+                    RawSink::Multipart(_) => None,
+                };
+                match enc.finish() {
+                    Ok(RawSink::Spool { path, .. }) => {
+                        let _ = std::fs::remove_file(&path);
+                    }
+                    Ok(RawSink::Multipart(w)) => w.abort(),
+                    Err(_) => {
+                        if let Some(path) = spool_path {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                        // Multipart case: finish() failing here means the write to
+                        // the multipart writer failed, which only happens once its
+                        // background thread has already exited — and every exit
+                        // path in that thread already calls the sink's abort (or
+                        // complete); nothing further to do.
+                    }
                 }
-                RawSink::Multipart(w) => w.abort(),
-            },
+            }
             None => {}
         }
     }
@@ -681,6 +704,143 @@ mod tests {
 
         assert_eq!(size, uploaded.lock().unwrap().len() as u64);
         assert!(!uploaded.lock().unwrap().is_empty());
+    }
+
+    // Dropping a writer without finish() must not let flate2's own Drop
+    // impl (which unconditionally attempts a trailer write once the
+    // encoder itself is dropped) write into an already-removed spool file
+    // or an already-aborted multipart writer. Covers the three Drop cases
+    // that had no coverage before this fix: gzip+multipart, gzip+spool,
+    // and plain+multipart (plain+spool is already covered by
+    // dump::create::tests::jobs_parallel_dump_propagates_error_and_cleans_up).
+    #[test]
+    fn drop_without_finish_cleans_up_every_sink_variant() {
+        use crate::storage::MultipartWriter;
+        use std::sync::{Arc, Mutex};
+
+        struct TrackingMultipartWriter {
+            data: Arc<Mutex<Vec<u8>>>,
+            aborted: Arc<Mutex<bool>>,
+        }
+        impl Write for TrackingMultipartWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.data.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl MultipartWriter for TrackingMultipartWriter {
+            fn finish(self: Box<Self>) -> Result<u64> {
+                Ok(self.data.lock().unwrap().len() as u64)
+            }
+            fn abort(&self) {
+                *self.aborted.lock().unwrap() = true;
+            }
+        }
+
+        struct TrackingStorage {
+            aborted: Arc<Mutex<bool>>,
+        }
+        impl crate::storage::Storage for TrackingStorage {
+            fn list_dumps(&self) -> Result<Vec<String>> {
+                unimplemented!()
+            }
+            fn get(&self, _path: &str) -> Result<Vec<u8>> {
+                unimplemented!()
+            }
+            fn put(&self, _path: &str, _data: &[u8]) -> Result<()> {
+                unimplemented!()
+            }
+            fn exists(&self, _path: &str) -> Result<bool> {
+                unimplemented!()
+            }
+            fn delete(&self, _prefix: &str) -> Result<()> {
+                unimplemented!()
+            }
+            fn list(&self, _prefix: &str) -> Result<Vec<String>> {
+                unimplemented!()
+            }
+            fn size(&self, _prefix: &str) -> Result<u64> {
+                unimplemented!()
+            }
+            fn multipart_writer(&self, _path: &str) -> Result<Option<Box<dyn MultipartWriter>>> {
+                Ok(Some(Box::new(TrackingMultipartWriter {
+                    data: Arc::new(Mutex::new(Vec::new())),
+                    aborted: self.aborted.clone(),
+                })))
+            }
+        }
+
+        // Gzip + multipart: dropped without finish() must call abort()
+        // exactly once, with no panic from a trailer write landing on an
+        // already-aborted resource.
+        let aborted = Arc::new(Mutex::new(false));
+        let storage = TrackingStorage {
+            aborted: aborted.clone(),
+        };
+        let writer = CollectionDataWriter::create(
+            &storage,
+            "d1/data/app/users.bson.gz",
+            "/does/not/exist/unused-when-multipart",
+            "app",
+            "users",
+            true,
+        )
+        .unwrap();
+        drop(writer);
+        assert!(
+            *aborted.lock().unwrap(),
+            "expected abort() on gzip+multipart drop"
+        );
+
+        // Plain + multipart: dropped without finish() must also call
+        // abort() (no GzEncoder involved at all here).
+        let aborted2 = Arc::new(Mutex::new(false));
+        let storage2 = TrackingStorage {
+            aborted: aborted2.clone(),
+        };
+        let writer2 = CollectionDataWriter::create(
+            &storage2,
+            "d1/data/app/users.bson",
+            "/does/not/exist/unused-when-multipart",
+            "app",
+            "users",
+            false,
+        )
+        .unwrap();
+        drop(writer2);
+        assert!(
+            *aborted2.lock().unwrap(),
+            "expected abort() on plain+multipart drop"
+        );
+
+        // Gzip + spool: dropped without finish() must remove the local
+        // spool file (the trailer write from flate2's own Drop lands in
+        // the file before it's removed, which is fine — the file is
+        // deleted either way).
+        let dir = tempfile::tempdir().unwrap();
+        let storage3 = DirectoryStorage::new(dir.path()).unwrap();
+        let tmp_dir = dir.path().join("spool");
+        let writer3 = CollectionDataWriter::create(
+            &storage3,
+            "d1/data/app/users.bson.gz",
+            tmp_dir.to_str().unwrap(),
+            "app",
+            "users",
+            true,
+        )
+        .unwrap();
+        drop(writer3);
+        let leftover: Vec<_> = std::fs::read_dir(&tmp_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "expected no leftover spool files, found {leftover:?}"
+        );
     }
 
     fn meta(id: &str, status: DumpStatus, created: &str) -> DumpMetadata {
