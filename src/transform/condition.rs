@@ -232,6 +232,7 @@ fn find_op(term: &str, op: &str) -> Option<usize> {
 /// space-separated phrase like `"not in"`) when it's not embedded inside a
 /// larger identifier — the character before and after the match, if any,
 /// must not be alphanumeric or `_`.
+#[allow(dead_code)]
 fn find_word_op(term: &str, op: &str) -> Option<usize> {
     let chars: Vec<char> = term.chars().collect();
     let op_chars: Vec<char> = op.chars().collect();
@@ -247,8 +248,7 @@ fn find_word_op(term: &str, op: &str) -> Option<usize> {
         } else if c == '\'' || c == '"' {
             quote = Some(c);
         } else if chars[i..].starts_with(&op_chars[..]) {
-            let before_ok = i == 0
-                || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+            let before_ok = i == 0 || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
             let after_idx = i + op_chars.len();
             let after_ok = after_idx >= chars.len()
                 || !(chars[after_idx].is_alphanumeric() || chars[after_idx] == '_');
@@ -265,12 +265,16 @@ fn find_word_op(term: &str, op: &str) -> Option<usize> {
 /// Parse a bracketed literal list, e.g. `['gery', 'sophie']` or `[30, 20]`,
 /// into per-element `Bson` values using the same literal grammar as a scalar
 /// RHS. Returns `None` if `s` isn't bracket-delimited.
+#[allow(dead_code)]
 fn parse_list(s: &str) -> Option<Vec<Bson>> {
     let s = s.trim();
     if !s.starts_with('[') || !s.ends_with(']') {
         return None;
     }
     let interior = &s[1..s.len() - 1];
+    if interior.trim().is_empty() {
+        return Some(Vec::new());
+    }
     Some(
         split_top(interior, ",")
             .iter()
@@ -542,5 +546,14 @@ mod tests {
             Some(vec![Bson::Int64(30), Bson::Int64(20)])
         );
         assert_eq!(parse_list("not a list"), None);
+    }
+
+    // Acceptance: an empty bracket literal parses as an empty list, not a
+    // one-element list containing an empty string — `field in []` must never
+    // match, `field not in []` must always match.
+    #[test]
+    fn parse_list_empty_brackets_is_empty_list() {
+        assert_eq!(parse_list("[]"), Some(Vec::new()));
+        assert_eq!(parse_list("[ ]"), Some(Vec::new()));
     }
 }
