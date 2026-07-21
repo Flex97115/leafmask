@@ -100,6 +100,13 @@ fn eval_term(term: &str, doc: &Document) -> bool {
             return eval_compare(lhs, op, rhs, doc);
         }
     }
+    for op in ["not in", "in"] {
+        if let Some(idx) = find_word_op(term, op) {
+            let lhs = term[..idx].trim();
+            let rhs = term[idx + op.len()..].trim();
+            return eval_compare(lhs, op, rhs, doc);
+        }
+    }
     // bare field -> truthiness.
     truthy(get_path(doc, term.trim()))
 }
@@ -232,7 +239,6 @@ fn find_op(term: &str, op: &str) -> Option<usize> {
 /// space-separated phrase like `"not in"`) when it's not embedded inside a
 /// larger identifier — the character before and after the match, if any,
 /// must not be alphanumeric or `_`.
-#[allow(dead_code)]
 fn find_word_op(term: &str, op: &str) -> Option<usize> {
     let chars: Vec<char> = term.chars().collect();
     let op_chars: Vec<char> = op.chars().collect();
@@ -265,7 +271,6 @@ fn find_word_op(term: &str, op: &str) -> Option<usize> {
 /// Parse a bracketed literal list, e.g. `['gery', 'sophie']` or `[30, 20]`,
 /// into per-element `Bson` values using the same literal grammar as a scalar
 /// RHS. Returns `None` if `s` isn't bracket-delimited.
-#[allow(dead_code)]
 fn parse_list(s: &str) -> Option<Vec<Bson>> {
     let s = s.trim();
     if !s.starts_with('[') || !s.ends_with(']') {
@@ -285,25 +290,38 @@ fn parse_list(s: &str) -> Option<Vec<Bson>> {
 
 fn eval_compare(lhs: &str, op: &str, rhs: &str, doc: &Document) -> bool {
     let left = get_path(doc, lhs).cloned().unwrap_or(Bson::Null);
-    let right = parse_literal(rhs);
     match op {
-        "==" => bson_eq(&left, &right),
-        "!=" => !bson_eq(&left, &right),
+        "in" | "not in" => {
+            let list = parse_list(rhs).unwrap_or_default();
+            let found = list.iter().any(|v| bson_eq(&left, v));
+            if op == "in" {
+                found
+            } else {
+                !found
+            }
+        }
         _ => {
-            let nums = as_f64(&left).zip(as_f64(&right)).or_else(|| {
-                as_millis(&left)
-                    .zip(as_millis(&right))
-                    .map(|(a, b)| (a as f64, b as f64))
-            });
-            match nums {
-                Some((a, b)) => match op {
-                    ">" => a > b,
-                    "<" => a < b,
-                    ">=" => a >= b,
-                    "<=" => a <= b,
-                    _ => false,
-                },
-                None => false,
+            let right = parse_literal(rhs);
+            match op {
+                "==" => bson_eq(&left, &right),
+                "!=" => !bson_eq(&left, &right),
+                _ => {
+                    let nums = as_f64(&left).zip(as_f64(&right)).or_else(|| {
+                        as_millis(&left)
+                            .zip(as_millis(&right))
+                            .map(|(a, b)| (a as f64, b as f64))
+                    });
+                    match nums {
+                        Some((a, b)) => match op {
+                            ">" => a > b,
+                            "<" => a < b,
+                            ">=" => a >= b,
+                            "<=" => a <= b,
+                            _ => false,
+                        },
+                        None => false,
+                    }
+                }
             }
         }
     }
@@ -555,5 +573,39 @@ mod tests {
     fn parse_list_empty_brackets_is_empty_list() {
         assert_eq!(parse_list("[]"), Some(Vec::new()));
         assert_eq!(parse_list("[ ]"), Some(Vec::new()));
+    }
+
+    // Acceptance: `in` matches when the field's value equals any element of
+    // the literal list; `not in` is the negation. Numeric coercion (Int64 vs
+    // Double) behaves the same as `==` already does via bson_eq.
+    #[test]
+    fn in_and_not_in_eval() {
+        let c = Condition::parse("client_name in ['gery', 'sophie']").unwrap();
+        assert!(c.eval(&doc(&[("client_name", Bson::String("gery".into()))])));
+        assert!(c.eval(&doc(&[("client_name", Bson::String("sophie".into()))])));
+        assert!(!c.eval(&doc(&[("client_name", Bson::String("marc".into()))])));
+        // absent field never matches `in` unless the list contains null.
+        assert!(!c.eval(&doc(&[])));
+
+        let c = Condition::parse("client_age in [30, 20]").unwrap();
+        assert!(c.eval(&doc(&[("client_age", Bson::Int64(30))])));
+        assert!(c.eval(&doc(&[("client_age", Bson::Double(20.0))])));
+        assert!(!c.eval(&doc(&[("client_age", Bson::Int64(25))])));
+
+        let c = Condition::parse("client_age not in [13, 14]").unwrap();
+        assert!(c.eval(&doc(&[("client_age", Bson::Int64(30))])));
+        assert!(!c.eval(&doc(&[("client_age", Bson::Int64(13))])));
+        // absent field: `not in` is true (mirrors $nin treating missing as
+        // not-in unless the list itself contains null).
+        assert!(c.eval(&doc(&[])));
+    }
+
+    // Acceptance: an `in` op must not false-match inside a field name that
+    // contains "in" as raw text (e.g. "domain").
+    #[test]
+    fn in_does_not_false_match_inside_identifier() {
+        let c = Condition::parse("domain in ['example.com']").unwrap();
+        assert!(c.eval(&doc(&[("domain", Bson::String("example.com".into()))])));
+        assert!(!c.eval(&doc(&[("domain", Bson::String("other.com".into()))])));
     }
 }
