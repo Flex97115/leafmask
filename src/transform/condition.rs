@@ -151,6 +151,13 @@ fn filter_term(term: &str) -> Document {
             return filter_compare(lhs, op, rhs);
         }
     }
+    for op in ["not in", "in"] {
+        if let Some(idx) = find_word_op(term, op) {
+            let lhs = term[..idx].trim();
+            let rhs = term[idx + op.len()..].trim();
+            return filter_compare(lhs, op, rhs);
+        }
+    }
     // bare field -> truthiness: present, and not one of the "falsy" values.
     let mut cond = Document::new();
     cond.insert("$exists", true);
@@ -169,8 +176,23 @@ fn filter_term(term: &str) -> Document {
 }
 
 fn filter_compare(lhs: &str, op: &str, rhs: &str) -> Document {
-    let value = literal_to_filter_bson(rhs);
     let mut d = Document::new();
+    if op == "in" || op == "not in" {
+        let list: Vec<Bson> = parse_list(rhs)
+            .unwrap_or_default()
+            .iter()
+            .map(|v| match v {
+                Bson::String(s) => literal_to_filter_bson(&format!("'{s}'")),
+                other => other.clone(),
+            })
+            .collect();
+        let mongo_op = if op == "in" { "$in" } else { "$nin" };
+        let mut inner = Document::new();
+        inner.insert(mongo_op, list);
+        d.insert(lhs, inner);
+        return d;
+    }
+    let value = literal_to_filter_bson(rhs);
     match op {
         "==" => {
             d.insert(lhs, value);
@@ -607,5 +629,51 @@ mod tests {
         let c = Condition::parse("domain in ['example.com']").unwrap();
         assert!(c.eval(&doc(&[("domain", Bson::String("example.com".into()))])));
         assert!(!c.eval(&doc(&[("domain", Bson::String("other.com".into()))])));
+    }
+
+    // Acceptance: to_filter translates `in`/`not in` into native Mongo
+    // $in/$nin, so subset_conds can push a list-membership filter to the
+    // server instead of fetching every document.
+    #[test]
+    fn to_filter_translates_in_and_not_in() {
+        let c = Condition::parse("client_name in ['gery', 'sophie']").unwrap();
+        let mut want = Document::new();
+        want.insert(
+            "client_name",
+            doc_in(vec![
+                Bson::String("gery".into()),
+                Bson::String("sophie".into()),
+            ]),
+        );
+        assert_eq!(c.to_filter(), want);
+
+        let c = Condition::parse("client_age not in [13, 14]").unwrap();
+        let mut inner = Document::new();
+        inner.insert("$nin", vec![Bson::Int64(13), Bson::Int64(14)]);
+        let mut want = Document::new();
+        want.insert("client_age", inner);
+        assert_eq!(c.to_filter(), want);
+    }
+
+    // Acceptance: a quoted RFC3339 string inside an `in` list is upgraded to
+    // a real BSON datetime, same as a scalar comparison, so a list of date
+    // literals matches server-side against a real Bson::DateTime field.
+    #[test]
+    fn to_filter_in_list_coerces_rfc3339_literals() {
+        let c = Condition::parse("created_at in ['2026-07-17T00:00:00Z', '2026-07-18T00:00:00Z']")
+            .unwrap();
+        let filter = c.to_filter();
+        let inner = filter.get_document("created_at").unwrap();
+        let list = inner.get_array("$in").unwrap();
+        assert_eq!(
+            list[0],
+            Bson::DateTime(bson::DateTime::parse_rfc3339_str("2026-07-17T00:00:00Z").unwrap())
+        );
+    }
+
+    fn doc_in(values: Vec<Bson>) -> Document {
+        let mut d = Document::new();
+        d.insert("$in", values);
+        d
     }
 }
