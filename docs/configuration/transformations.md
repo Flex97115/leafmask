@@ -92,6 +92,8 @@ The expression language supports:
 
 - field references (dotted paths): `age`, `address.country`
 - comparisons: `==` `!=` `>` `<` `>=` `<=`
+- list membership: `in` / `not in` against a bracketed literal list, e.g.
+  `client_age in [30, 20]`
 - boolean composition: `and`, `or`
 - bare-field truthiness: `flags.enabled`
 

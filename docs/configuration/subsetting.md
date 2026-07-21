@@ -62,14 +62,25 @@ filter of its own; today only the `orders` side of that is live.
 
 The condition uses the same [expression
 language](transformations.md#conditional-transformation) as `when` — field
-comparisons (`== != > < >= <=`) and `and`/`or`. A quoted value that parses as
-an RFC3339 timestamp (e.g. `"2026-07-17T00:00:00Z"`) is compared as a real
-datetime, so date-range conditions work against a `datetime` field:
+comparisons (`== != > < >= <=`), list membership (`in` / `not in` against a
+bracketed list, e.g. `region in ['EU', 'UK']`), and `and`/`or`. A quoted value
+that parses as an RFC3339 timestamp (e.g. `"2026-07-17T00:00:00Z"`) is
+compared as a real datetime, so date-range conditions work against a
+`datetime` field:
 
 ```yaml
 dump:
   subset_conds:
     residence_temperature: "created_at >= '2026-07-17T00:00:00Z' and created_at < '2026-07-18T00:00:00Z'"
+```
+
+Filter against a list of values with `in` / `not in`:
+
+```yaml
+dump:
+  subset_conds:
+    orders: "client_name in ['gery', 'sophie']"
+    users: "client_age not in [13, 14]"
 ```
 
 ### Dynamic date windows

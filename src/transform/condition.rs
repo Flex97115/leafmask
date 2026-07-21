@@ -6,9 +6,10 @@
 //! document's own fields.
 //!
 //! Gap: the source evaluates full Go/expr expressions. This evaluator supports
-//! field references, the comparison operators `== != > < >= <=`, boolean
-//! `and`/`or`, and bare-field truthiness — no parentheses or arithmetic. See
-//! regeneration-gaps.md.
+//! field references, the comparison operators `== != > < >= <=`, list
+//! membership (`in` / `not in` against a bracketed literal list, e.g. `age in
+//! [18, 21]`), boolean `and`/`or`, and bare-field truthiness — no parentheses
+//! or arithmetic. See regeneration-gaps.md.
 
 use bson::{Bson, Document};
 
