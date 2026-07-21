@@ -228,6 +228,57 @@ fn find_op(term: &str, op: &str) -> Option<usize> {
     None
 }
 
+/// Like [`find_op`], but only matches `op` (an alphabetic word or
+/// space-separated phrase like `"not in"`) when it's not embedded inside a
+/// larger identifier — the character before and after the match, if any,
+/// must not be alphanumeric or `_`.
+fn find_word_op(term: &str, op: &str) -> Option<usize> {
+    let chars: Vec<char> = term.chars().collect();
+    let op_chars: Vec<char> = op.chars().collect();
+    let mut quote: Option<char> = None;
+    let mut byte_idx = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+        } else if c == '\'' || c == '"' {
+            quote = Some(c);
+        } else if chars[i..].starts_with(&op_chars[..]) {
+            let before_ok = i == 0
+                || !(chars[i - 1].is_alphanumeric() || chars[i - 1] == '_');
+            let after_idx = i + op_chars.len();
+            let after_ok = after_idx >= chars.len()
+                || !(chars[after_idx].is_alphanumeric() || chars[after_idx] == '_');
+            if before_ok && after_ok {
+                return Some(byte_idx);
+            }
+        }
+        byte_idx += c.len_utf8();
+        i += 1;
+    }
+    None
+}
+
+/// Parse a bracketed literal list, e.g. `['gery', 'sophie']` or `[30, 20]`,
+/// into per-element `Bson` values using the same literal grammar as a scalar
+/// RHS. Returns `None` if `s` isn't bracket-delimited.
+fn parse_list(s: &str) -> Option<Vec<Bson>> {
+    let s = s.trim();
+    if !s.starts_with('[') || !s.ends_with(']') {
+        return None;
+    }
+    let interior = &s[1..s.len() - 1];
+    Some(
+        split_top(interior, ",")
+            .iter()
+            .map(|piece| parse_literal(piece.trim()))
+            .collect(),
+    )
+}
+
 fn eval_compare(lhs: &str, op: &str, rhs: &str, doc: &Document) -> bool {
     let left = get_path(doc, lhs).cloned().unwrap_or(Bson::Null);
     let right = parse_literal(rhs);
@@ -461,5 +512,35 @@ mod tests {
                 bson::DateTime::parse_rfc3339_str("2026-07-17T00:00:00Z").unwrap()
             ))
         );
+    }
+
+    // Acceptance: a word-operator like "in" must not false-match inside an
+    // identifier substring (e.g. "domain" contains "in" as raw text) — only
+    // a whitespace/boundary-delimited occurrence counts.
+    #[test]
+    fn find_word_op_respects_boundaries() {
+        assert_eq!(find_word_op("age in", "in"), Some(4));
+        assert_eq!(find_word_op("domain in", "in"), Some(7));
+        assert_eq!(find_word_op("domain", "in"), None);
+        assert_eq!(find_word_op("training == true", "in"), None);
+    }
+
+    // Acceptance: a bracketed literal list becomes a Vec<Bson> using the same
+    // per-element literal grammar as a scalar RHS (quoted string, bool, null,
+    // int, float, bare-string fallback).
+    #[test]
+    fn parse_list_parses_bracketed_literals() {
+        assert_eq!(
+            parse_list("['gery', 'sophie']"),
+            Some(vec![
+                Bson::String("gery".into()),
+                Bson::String("sophie".into())
+            ])
+        );
+        assert_eq!(
+            parse_list("[30, 20]"),
+            Some(vec![Bson::Int64(30), Bson::Int64(20)])
+        );
+        assert_eq!(parse_list("not a list"), None);
     }
 }
