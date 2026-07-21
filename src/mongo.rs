@@ -108,7 +108,9 @@ pub struct BatchInsert {
 }
 
 /// A write side: create collections/indexes and insert documents (for restore).
-pub trait MongoSink {
+///
+/// `Sync` so a restore can share one sink across worker threads (`--jobs`).
+pub trait MongoSink: Sync {
     /// Create the collection if needed, applying validator and options.
     fn ensure_collection(
         &self,

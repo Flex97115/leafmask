@@ -8,6 +8,9 @@
 //! so restoring a collection never holds more than one batch in memory. The
 //! sink is abstracted so the driver is unit-tested without a live MongoDB.
 
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
+
 use bson::Document;
 
 use crate::dump::{open_document_reader, read_collection_meta, resolve, DumpMetadata};
@@ -38,6 +41,9 @@ pub struct RestoreOptions {
     /// from the dump, so re-running a restore against the same target is
     /// idempotent instead of hitting `_id` duplicate-key errors.
     pub clean: bool,
+    /// Number of collections to restore concurrently. `0` or `1` (the
+    /// default) restores sequentially.
+    pub parallel_jobs: usize,
 }
 
 impl RestoreOptions {
@@ -75,6 +81,37 @@ pub struct RestoreReport {
     pub failed: Vec<String>,
 }
 
+/// One collection queued for restore, in dump-metadata order.
+struct RestoreItem {
+    db: String,
+    coll: String,
+}
+
+/// Outcome of restoring one collection's documents (not indexes) — local to
+/// that collection, never carried over from a previous one, so progress
+/// logging reports the current collection's own count.
+#[derive(Debug, Clone, Default)]
+struct InsertOutcome {
+    inserted: u64,
+    skipped: u64,
+}
+
+/// Outcome of restoring one collection end to end (documents plus, unless
+/// `dependency_order`, its indexes).
+#[derive(Debug, Default)]
+struct RestoreItemResult {
+    inserted: u64,
+    skipped: u64,
+    indexes_created: u64,
+    /// Set when the collection failed a non-excluded insert error and
+    /// `exit_on_error` is off (mongorestore semantics: skip and move on).
+    failed: Option<String>,
+    /// Set for any error that must abort the whole restore: a metadata/
+    /// clean/ensure/index failure (always fatal), or an insert failure with
+    /// `exit_on_error` on.
+    fatal: Option<Error>,
+}
+
 impl<'a> Restore<'a> {
     /// Run the restore of the dump identified by `id_or_latest`.
     pub fn run(&self, id_or_latest: &str, runner: &dyn ScriptRunner) -> Result<RestoreReport> {
@@ -83,43 +120,37 @@ impl<'a> Restore<'a> {
 
         self.scripts.run_stage("pre-data", runner)?;
 
+        let mut items = Vec::new();
         for db in &meta.databases {
             for coll in &db.collections {
-                if !self.options.include_collection(&coll.name) {
-                    continue;
+                if self.options.include_collection(&coll.name) {
+                    items.push(RestoreItem {
+                        db: db.name.clone(),
+                        coll: coll.name.clone(),
+                    });
                 }
-                let cmeta = read_collection_meta(self.storage, &meta.id, &db.name, &coll.name)?;
-                log::info!(
-                    "  {}.{}: restoring {} documents",
-                    db.name,
-                    coll.name,
-                    cmeta.document_count
-                );
-                if self.options.clean {
-                    self.sink.drop_collection(&db.name, &coll.name)?;
-                }
-                self.sink.ensure_collection(
-                    &db.name,
-                    &coll.name,
-                    &cmeta.validator,
-                    &cmeta.options,
-                )?;
+            }
+        }
 
-                match self.insert_documents(&meta.id, &db.name, &coll.name, &mut report) {
-                    Ok(()) => {}
-                    Err(e) if self.options.exit_on_error => return Err(e),
-                    Err(e) => {
-                        // The collection is reported failed; the restore moves
-                        // on to the next collection (mongorestore semantics).
-                        log::error!("  {}.{}: {e}", db.name, coll.name);
-                        report.failed.push(format!("{}.{}", db.name, coll.name));
-                        continue;
-                    }
-                }
+        let jobs = self.options.parallel_jobs.max(1);
+        let results: Vec<RestoreItemResult> = if jobs <= 1 || items.len() <= 1 {
+            items
+                .iter()
+                .map(|item| self.restore_item(&meta.id, item))
+                .collect()
+        } else {
+            self.restore_items_parallel(&meta.id, &items, jobs)
+        };
 
-                if !self.options.dependency_order {
-                    self.create_indexes(&db.name, &coll.name, &cmeta.indexes, &mut report)?;
-                }
+        for result in results {
+            report.inserted += result.inserted;
+            report.skipped += result.skipped;
+            report.indexes_created += result.indexes_created;
+            if let Some(name) = result.failed {
+                report.failed.push(name);
+            }
+            if let Some(e) = result.fatal {
+                return Err(e);
             }
         }
 
@@ -131,7 +162,8 @@ impl<'a> Restore<'a> {
                     if self.options.include_collection(&coll.name) {
                         let cmeta =
                             read_collection_meta(self.storage, &meta.id, &db.name, &coll.name)?;
-                        self.create_indexes(&db.name, &coll.name, &cmeta.indexes, &mut report)?;
+                        report.indexes_created +=
+                            self.create_indexes(&db.name, &coll.name, &cmeta.indexes)?;
                     }
                 }
             }
@@ -141,25 +173,131 @@ impl<'a> Restore<'a> {
         Ok(report)
     }
 
-    /// Stream a collection's documents out of the dump and insert them
-    /// `batch_size` at a time through [`MongoSink::insert_many`].
-    fn insert_documents(
+    /// Restore `items` across `jobs` worker threads pulling from a shared
+    /// cursor. When `exit_on_error` is set, a fatal failure stops new items
+    /// from being claimed (items already claimed run to completion); without
+    /// it every item runs regardless (mongorestore semantics). Returns one
+    /// result per item, in the item's original order.
+    fn restore_items_parallel(
         &self,
         dump_id: &str,
-        db: &str,
-        coll: &str,
-        report: &mut RestoreReport,
-    ) -> Result<()> {
-        let batch_size = self.options.batch_size.max(1);
-        let mut reader = open_document_reader(self.storage, dump_id, db, coll)?;
-        loop {
-            let batch = reader.next_batch(batch_size)?;
-            if batch.is_empty() {
-                return Ok(());
+        items: &[RestoreItem],
+        jobs: usize,
+    ) -> Vec<RestoreItemResult> {
+        let jobs = jobs.min(items.len());
+        let results: Vec<Mutex<Option<RestoreItemResult>>> =
+            (0..items.len()).map(|_| Mutex::new(None)).collect();
+        let next = AtomicUsize::new(0);
+        let stop = AtomicBool::new(false);
+
+        std::thread::scope(|scope| {
+            for _ in 0..jobs {
+                scope.spawn(|| loop {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= items.len() {
+                        break;
+                    }
+                    let result = self.restore_item(dump_id, &items[i]);
+                    if result.fatal.is_some() && self.options.exit_on_error {
+                        stop.store(true, Ordering::Relaxed);
+                    }
+                    *results[i].lock().unwrap() = Some(result);
+                });
             }
-            self.insert_batch(db, coll, &batch, report)?;
-            if report.inserted % 100_000 < batch_size as u64 && report.inserted >= 100_000 {
-                log::info!("  {db}.{coll}: {} documents...", report.inserted);
+        });
+
+        results
+            .into_iter()
+            .map(|m| m.into_inner().unwrap().unwrap_or_default())
+            .collect()
+    }
+
+    /// Restore one collection: clean/ensure, then its documents, then (unless
+    /// `dependency_order`) its indexes.
+    fn restore_item(&self, dump_id: &str, item: &RestoreItem) -> RestoreItemResult {
+        let (db, coll) = (item.db.as_str(), item.coll.as_str());
+        let mut result = RestoreItemResult::default();
+
+        let cmeta = match read_collection_meta(self.storage, dump_id, db, coll) {
+            Ok(m) => m,
+            Err(e) => {
+                result.fatal = Some(e);
+                return result;
+            }
+        };
+        log::info!(
+            "  {db}.{coll}: restoring {} documents",
+            cmeta.document_count
+        );
+
+        if self.options.clean {
+            if let Err(e) = self.sink.drop_collection(db, coll) {
+                result.fatal = Some(e);
+                return result;
+            }
+        }
+        if let Err(e) = self
+            .sink
+            .ensure_collection(db, coll, &cmeta.validator, &cmeta.options)
+        {
+            result.fatal = Some(e);
+            return result;
+        }
+
+        let (outcome, insert_result) = self.insert_documents(dump_id, db, coll);
+        result.inserted = outcome.inserted;
+        result.skipped = outcome.skipped;
+        match insert_result {
+            Ok(()) => {}
+            Err(e) if self.options.exit_on_error => {
+                result.fatal = Some(e);
+                return result;
+            }
+            Err(e) => {
+                // The collection is reported failed; the restore moves on to
+                // the next collection (mongorestore semantics).
+                log::error!("  {db}.{coll}: {e}");
+                result.failed = Some(format!("{db}.{coll}"));
+                return result;
+            }
+        }
+
+        if !self.options.dependency_order {
+            match self.create_indexes(db, coll, &cmeta.indexes) {
+                Ok(n) => result.indexes_created = n,
+                Err(e) => result.fatal = Some(e),
+            }
+        }
+        result
+    }
+
+    /// Stream a collection's documents out of the dump and insert them
+    /// `batch_size` at a time through [`MongoSink::insert_many`]. The
+    /// returned [`InsertOutcome`] is local to this call, so progress logging
+    /// and the caller's tally both start from zero for every collection.
+    fn insert_documents(&self, dump_id: &str, db: &str, coll: &str) -> (InsertOutcome, Result<()>) {
+        let batch_size = self.options.batch_size.max(1);
+        let mut reader = match open_document_reader(self.storage, dump_id, db, coll) {
+            Ok(r) => r,
+            Err(e) => return (InsertOutcome::default(), Err(e)),
+        };
+        let mut outcome = InsertOutcome::default();
+        loop {
+            let batch = match reader.next_batch(batch_size) {
+                Ok(b) => b,
+                Err(e) => return (outcome, Err(e)),
+            };
+            if batch.is_empty() {
+                return (outcome, Ok(()));
+            }
+            if let Err(e) = self.insert_batch(db, coll, &batch, &mut outcome) {
+                return (outcome, Err(e));
+            }
+            if outcome.inserted % 100_000 < batch_size as u64 && outcome.inserted >= 100_000 {
+                log::info!("  {db}.{coll}: {} documents...", outcome.inserted);
             }
         }
     }
@@ -172,20 +310,20 @@ impl<'a> Restore<'a> {
         db: &str,
         coll: &str,
         batch: &[Document],
-        report: &mut RestoreReport,
+        outcome: &mut InsertOutcome,
     ) -> Result<()> {
         let mut start = 0;
         while start < batch.len() {
             let out = self
                 .sink
                 .insert_many(db, coll, &batch[start..], self.options.ordered)?;
-            report.inserted += out.inserted;
+            outcome.inserted += out.inserted;
             if out.failures.is_empty() {
                 return Ok(());
             }
             for (_, err) in &out.failures {
                 if self.exclusions.is_excluded(coll, err) {
-                    report.skipped += 1; // logged & skipped, restoration continues.
+                    outcome.skipped += 1; // logged & skipped, restoration continues.
                 } else {
                     return Err(Error::Restore(format!(
                         "insert into {db}.{coll} failed (code {:?}, index {:?})",
@@ -202,13 +340,10 @@ impl<'a> Restore<'a> {
         Ok(())
     }
 
-    fn create_indexes(
-        &self,
-        db: &str,
-        coll: &str,
-        indexes: &[IndexSpec],
-        report: &mut RestoreReport,
-    ) -> Result<()> {
+    /// Create `indexes` on `db.coll`, returning how many were created (the
+    /// automatic `_id_` index and any excluded by name are skipped).
+    fn create_indexes(&self, db: &str, coll: &str, indexes: &[IndexSpec]) -> Result<u64> {
+        let mut created = 0;
         for idx in indexes {
             // The default `_id_` index is created automatically with the
             // collection and cannot be (re)declared explicitly.
@@ -217,10 +352,10 @@ impl<'a> Restore<'a> {
             }
             if self.options.include_index(&idx.name) {
                 self.sink.create_index(db, coll, idx)?;
-                report.indexes_created += 1;
+                created += 1;
             }
         }
-        Ok(())
+        Ok(created)
     }
 }
 
@@ -578,5 +713,144 @@ mod tests {
         assert_eq!(report.inserted, 2);
         assert_eq!(report.skipped, 1);
         assert_eq!(sink.documents("app", "users").len(), 2);
+    }
+
+    /// Build a dump with several collections in one database.
+    fn seed_dump_multi(
+        id: &str,
+        collections: &[(&str, Vec<Document>)],
+    ) -> (tempfile::TempDir, DirectoryStorage) {
+        let dir = tempfile::tempdir().unwrap();
+        let s = DirectoryStorage::new(dir.path()).unwrap();
+        let mut tocs = Vec::new();
+        for (name, docs) in collections {
+            let data = CollectionData {
+                database: "app".into(),
+                collection: (*name).into(),
+                documents: docs.clone(),
+                indexes: vec![],
+                validator: None,
+                options: Default::default(),
+            };
+            write_collection_data(&s, id, &data, false).unwrap();
+            tocs.push(CollectionToc {
+                name: (*name).into(),
+                document_count: docs.len() as u64,
+                indexes: vec![],
+                restore_order: tocs.len() as u32,
+            });
+        }
+        write_metadata(
+            &s,
+            &DumpMetadata {
+                id: id.into(),
+                status: DumpStatus::Done,
+                created_at: "2026-07-01T00:00:00Z".into(),
+                databases: vec![DatabaseToc {
+                    name: "app".into(),
+                    collections: tocs,
+                }],
+                size: 0,
+            },
+        )
+        .unwrap();
+        (dir, s)
+    }
+
+    // Regression: the per-collection progress counter (`insert_documents`'s
+    // returned outcome) must start fresh for every collection instead of
+    // carrying over the previous collection's cumulative total.
+    #[test]
+    fn insert_documents_outcome_is_per_collection_not_cumulative() {
+        let (_d, s) = seed_dump_multi(
+            "20260701",
+            &[
+                ("a", (1..=3).map(doc).collect()),
+                ("b", (1..=2).map(doc).collect()),
+            ],
+        );
+        let sink = InMemoryMongo::new();
+        let r = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
+        };
+
+        let (outcome_a, res_a) = r.insert_documents("20260701", "app", "a");
+        res_a.unwrap();
+        assert_eq!(outcome_a.inserted, 3);
+
+        let (outcome_b, res_b) = r.insert_documents("20260701", "app", "b");
+        res_b.unwrap();
+        assert_eq!(
+            outcome_b.inserted, 2,
+            "collection b's outcome must not carry over collection a's count"
+        );
+    }
+
+    // Acceptance: restoring several collections in one run sums each
+    // collection's own inserts into the final report.
+    #[test]
+    fn restores_multiple_collections_and_sums_report() {
+        let (_d, s) = seed_dump_multi(
+            "20260701",
+            &[
+                ("a", (1..=3).map(doc).collect()),
+                ("b", (1..=2).map(doc).collect()),
+            ],
+        );
+        let sink = InMemoryMongo::new();
+        let r = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
+        };
+        let report = r.run("20260701", &NoScripts).unwrap();
+        assert_eq!(report.inserted, 5);
+        assert_eq!(sink.documents("app", "a").len(), 3);
+        assert_eq!(sink.documents("app", "b").len(), 2);
+    }
+
+    // Acceptance: `--jobs > 1` restores every collection (order among
+    // threads is nondeterministic, but the report totals and each
+    // collection's documents must match a sequential restore).
+    #[test]
+    fn parallel_jobs_restores_all_collections() {
+        let (_d, s) = seed_dump_multi(
+            "20260701",
+            &[
+                ("a", (1..=50).map(doc).collect()),
+                ("b", (1..=30).map(doc).collect()),
+                ("c", (1..=20).map(doc).collect()),
+            ],
+        );
+        let sink = InMemoryMongo::new();
+        let r = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                parallel_jobs: 4,
+                ..Default::default()
+            },
+        };
+        let report = r.run("20260701", &NoScripts).unwrap();
+        assert_eq!(report.inserted, 100);
+        assert!(report.failed.is_empty());
+        assert_eq!(sink.documents("app", "a").len(), 50);
+        assert_eq!(sink.documents("app", "b").len(), 30);
+        assert_eq!(sink.documents("app", "c").len(), 20);
     }
 }

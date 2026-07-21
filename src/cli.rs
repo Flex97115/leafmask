@@ -72,6 +72,9 @@ pub struct RestoreArgs {
     /// Drop each restored collection before recreating it from the dump.
     #[arg(long)]
     pub clean: bool,
+    /// Number of collections to restore concurrently.
+    #[arg(long, default_value_t = 1)]
+    pub jobs: usize,
 }
 
 /// Flags for the `validate` command.
@@ -547,6 +550,7 @@ fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> crate::Result<()> {
         dependency_order: args.dependency_order,
         exit_on_error: args.exit_on_error,
         clean: args.clean || section.clean,
+        parallel_jobs: args.jobs,
     };
     let restore = Restore {
         storage: storage.as_ref(),

@@ -134,6 +134,7 @@ leafmask --config leafmask.yaml restore latest --dependency-order
 | `--dependency-order` | off | create indexes/validators after documents |
 | `--exit-on-error` | off | abort the whole restore on a non-excluded error |
 | `--clean` | off | drop each restored collection before recreating it from the dump |
+| `--jobs <n>` | `1` | number of collections to restore concurrently |
 
 Documents are streamed out of the dump and bulk-inserted `--batch-size` at a
 time, so memory stays flat however large the collection is. A non-excluded
