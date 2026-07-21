@@ -487,6 +487,42 @@ fn subset_filter_pushes_down_to_mongo_query() {
     m.drop_database(&db).unwrap();
 }
 
+// The `in` operator must also push down to a real $in query server-side, not
+// just the scalar comparison operators already covered above.
+#[test]
+fn subset_in_filter_pushes_down_to_mongo_query() {
+    use leafmask::transform::condition::Condition;
+
+    let m = connect();
+    let db = db_name("filter_in");
+    let names = ["gery", "sophie", "marc", "julie", "paul"];
+    for (i, name) in names.iter().enumerate() {
+        m.insert(
+            &db,
+            "clients",
+            &doc! { "_id": i as i64, "client_name": name.to_string() },
+        )
+        .unwrap();
+    }
+
+    let filter = Condition::parse("client_name in ['gery', 'sophie']")
+        .unwrap()
+        .to_filter();
+
+    let filtered = m
+        .read_collection_filtered(&db, "clients", Some(&filter))
+        .unwrap();
+    let mut got: Vec<String> = filtered
+        .documents
+        .iter()
+        .map(|d| d.get_str("client_name").unwrap().to_string())
+        .collect();
+    got.sort();
+    assert_eq!(got, vec!["gery".to_string(), "sophie".to_string()]);
+
+    m.drop_database(&db).unwrap();
+}
+
 // End-to-end bench on a small volume: seeds, dumps, restores, verifies the
 // count, cleans up after itself.
 #[test]
