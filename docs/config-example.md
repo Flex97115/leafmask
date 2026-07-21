@@ -121,6 +121,7 @@ virtual_references:
 # Restore behavior
 # ---------------------------------------------------------------------------
 restore:
+  clean: false                            # drop each collection before restoring it
   insert_error_exclusions:
     global_error_codes: [11000]           # tolerate duplicate keys
     collections:

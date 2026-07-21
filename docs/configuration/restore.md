@@ -13,6 +13,7 @@ restore:
   exclude_collections: [ ... ]
   include_indexes: [ ... ]
   exclude_indexes: [ ... ]
+  clean: false
 ```
 
 ## Filtering
@@ -31,6 +32,17 @@ restore:
   exclude_collections: [sessions]
   include_indexes: [email_idx]
   exclude_indexes: [legacy_idx]
+```
+
+## Clean
+
+`clean` drops each restored collection before recreating it from the dump,
+same as [`--clean`](../commands.md#restore) on the command line. Either one
+turns it on:
+
+```yaml
+restore:
+  clean: true
 ```
 
 ## Tolerating insert errors

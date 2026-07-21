@@ -133,6 +133,7 @@ leafmask --config leafmask.yaml restore latest --dependency-order
 | `--ordered` | off | use ordered bulk writes (stop each batch at its first error) |
 | `--dependency-order` | off | create indexes/validators after documents |
 | `--exit-on-error` | off | abort the whole restore on a non-excluded error |
+| `--clean` | off | drop each restored collection before recreating it from the dump |
 
 Documents are streamed out of the dump and bulk-inserted `--batch-size` at a
 time, so memory stays flat however large the collection is. A non-excluded
@@ -143,7 +144,8 @@ insert error fails that collection and the restore moves on to the next one
 Each `--include-*`/`--exclude-*` flag falls back to a YAML list in the
 [`restore`](configuration/restore.md#filtering) config section when omitted;
 a non-empty flag on the command line overrides the matching YAML list
-entirely.
+entirely. `--clean` ORs with `clean: true` in the config section — either one
+turns it on.
 
 Tolerated insert errors, pre/post scripts, and filtering defaults all come
 from the [`restore`](configuration/restore.md) config section. Prints a
