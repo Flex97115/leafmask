@@ -1,6 +1,6 @@
 [package]
 name = "leafmask"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A stateless CLI tool for logical MongoDB database dumping, deterministic data anonymization, synthetic data generation, referentially-intact subsetting, and restoration."
 license = "Apache-2.0"
