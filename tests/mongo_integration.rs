@@ -523,6 +523,116 @@ fn subset_in_filter_pushes_down_to_mongo_query() {
     m.drop_database(&db).unwrap();
 }
 
+// Referential subsetting, end to end against a real deployment: a condition on
+// one collection must pull in exactly the documents the others need to stay
+// referentially intact — and it must do so without the closure materializing
+// the collections, i.e. by handing the dump `_id` filters it streams through.
+#[test]
+fn referential_subset_pulls_referenced_documents_and_still_streams() {
+    use leafmask::subset::{
+        MongoDocumentSource, ReferenceGraph, SubsetEngine, VirtualReferenceEntry,
+    };
+
+    let m = connect();
+    let db = db_name("subset_refs");
+
+    // Three EU orders pointing at two of the four users; one US order pointing
+    // at a user nothing else references.
+    for (id, user_id, region) in [
+        (1i64, 10i64, "EU"),
+        (2, 11, "EU"),
+        (3, 10, "EU"),
+        (4, 12, "US"),
+    ] {
+        m.insert(
+            &db,
+            "orders",
+            &doc! { "_id": id, "user_id": user_id, "region": region },
+        )
+        .unwrap();
+    }
+    for id in [10i64, 11, 12, 13] {
+        m.insert(
+            &db,
+            "users",
+            &doc! { "_id": id, "name": format!("user-{id}") },
+        )
+        .unwrap();
+    }
+
+    let entries: Vec<VirtualReferenceEntry> = serde_yaml::from_str(
+        "- collection: orders\n  references:\n    - field: user_id\n      references_collection: users\n",
+    )
+    .unwrap();
+    let graph = ReferenceGraph::from_entries(&entries);
+    let conds: BTreeMap<String, String> = [("orders".to_string(), "region == 'EU'".to_string())]
+        .into_iter()
+        .collect();
+
+    // Phase 1: the closure, keeping only identities.
+    let source = MongoDocumentSource::new(&m, &db, &graph);
+    let ids = SubsetEngine::new(&graph, &conds)
+        .unwrap()
+        .compute_ids(&source)
+        .unwrap();
+    let sorted = |collection: &str| -> Vec<i64> {
+        let mut v: Vec<i64> = ids[collection]
+            .iter()
+            .map(|b| b.as_i64().unwrap())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(sorted("orders"), vec![1, 2, 3]);
+    // 10 and 11 are referenced by the EU orders; 12 only by the US order, and
+    // 13 by nothing at all — neither belongs in the subset.
+    assert_eq!(sorted("users"), vec![10, 11]);
+
+    // Phase 2: the dump filters on those ids and streams as usual.
+    let dir = tempfile::tempdir().unwrap();
+    let storage = DirectoryStorage::new(dir.path()).unwrap();
+    let registry = Registry::with_builtins();
+    let engine = HashEngine::new("salt");
+    let mut filters = BTreeMap::new();
+    for (collection, selected) in &ids {
+        filters.insert(
+            collection.clone(),
+            doc! { "_id": { "$in": selected.clone() } },
+        );
+    }
+
+    let meta = Dump {
+        storage: &storage,
+        source: &m,
+        registry: &registry,
+        engine: &engine,
+        plan: None,
+        filters,
+        options: DumpOptions {
+            tmp_dir: Some(dir.path().display().to_string()),
+            include_databases: vec![db.clone()],
+            ..Default::default()
+        },
+    }
+    .run(chrono::Utc::now())
+    .unwrap();
+
+    let dumped = |collection: &str| -> Vec<i64> {
+        let mut v: Vec<i64> = read_collection_full(&storage, &meta.id, &db, collection)
+            .unwrap()
+            .documents
+            .iter()
+            .map(|d| d.get_i64("_id").unwrap())
+            .collect();
+        v.sort();
+        v
+    };
+    assert_eq!(dumped("orders"), vec![1, 2, 3]);
+    assert_eq!(dumped("users"), vec![10, 11]);
+
+    m.drop_database(&db).unwrap();
+}
+
 // End-to-end bench on a small volume: seeds, dumps, restores, verifies the
 // count, cleans up after itself.
 #[test]

@@ -2,9 +2,11 @@
 //! the referentially-intact subsetting engine.
 
 pub mod database_subsetting;
+pub mod mongo_source;
 pub mod virtual_references;
 
 pub use database_subsetting::{DocumentSource, SubsetEngine};
+pub use mongo_source::MongoDocumentSource;
 pub use virtual_references::{
     PolymorphicCase, RefTarget, ReferenceGraph, VirtualReference, VirtualReferenceEntry,
 };

@@ -89,12 +89,31 @@ pub struct TransformationPlan {
 }
 
 impl TransformationPlan {
-    /// Compile config into an executable plan against `registry`.
+    /// Compile config into an executable plan against `registry`, without any
+    /// declared reference graph — so `apply_for_references` has nothing to
+    /// propagate through. See [`Self::compile_with_references`].
     pub fn compile(
         configs: &[TransformationConfig],
         registry: &Registry,
         engine: &HashEngine,
     ) -> Result<Self> {
+        Self::compile_with_references(configs, registry, engine, &Default::default())
+    }
+
+    /// Compile config into an executable plan, first expanding it with the
+    /// transformations inherited through `graph`: a rule marked
+    /// `apply_for_references` is propagated to every field declared as
+    /// referencing the transformed one, so both sides of a reference get the
+    /// identical transformer and stay consistent.
+    pub fn compile_with_references(
+        configs: &[TransformationConfig],
+        registry: &Registry,
+        engine: &HashEngine,
+        graph: &crate::subset::ReferenceGraph,
+    ) -> Result<Self> {
+        let expanded = super::inheritance::expand_transformation_configs(configs, graph);
+        let configs: &[TransformationConfig] = &expanded;
+
         let mut collections = BTreeMap::new();
         for c in configs {
             let when = match &c.when {
@@ -351,6 +370,94 @@ mod tests {
             ("opted_out", Bson::Boolean(false)),
         ]);
         assert_eq!(p.transform(&r, &e, "users", &keep).unwrap(), keep);
+    }
+
+    fn reference_graph(src: &str) -> crate::subset::ReferenceGraph {
+        let entries: Vec<crate::subset::VirtualReferenceEntry> = serde_yaml::from_str(src).unwrap();
+        crate::subset::ReferenceGraph::from_entries(&entries)
+    }
+
+    // Acceptance: `apply_for_references` reaches the compiled plan — the
+    // referencing field is transformed by the same transformer, so an equal
+    // input on both sides of the reference yields an equal output and the
+    // reference survives anonymization.
+    #[test]
+    fn apply_for_references_propagates_into_the_compiled_plan() {
+        let configs: Vec<TransformationConfig> = serde_yaml::from_str(
+            "- collection: users\n  transformers:\n    - field: _id\n      name: hash\n      apply_for_references: true\n",
+        )
+        .unwrap();
+        let graph = reference_graph(
+            "- collection: orders\n  references:\n    - field: user_id\n      references_collection: users\n",
+        );
+        let (registry, engine) = (Registry::with_builtins(), HashEngine::new("salt"));
+        let plan =
+            TransformationPlan::compile_with_references(&configs, &registry, &engine, &graph)
+                .unwrap();
+
+        // orders.user_id was never configured, yet it now has a transformer.
+        assert_eq!(plan.transformed_fields("orders"), vec!["user_id"]);
+
+        let user = plan
+            .transform(
+                &registry,
+                &engine,
+                "users",
+                &doc(&[("_id", Bson::String("u-1".into()))]),
+            )
+            .unwrap();
+        let order = plan
+            .transform(
+                &registry,
+                &engine,
+                "orders",
+                &doc(&[("user_id", Bson::String("u-1".into()))]),
+            )
+            .unwrap();
+        assert_eq!(user.get("_id"), order.get("user_id"));
+        // and it is genuinely anonymized, not passed through.
+        assert_ne!(user.get_str("_id").unwrap(), "u-1");
+    }
+
+    // Without a declared reference graph nothing propagates, so the plain
+    // `compile` entry point stays exactly as it was.
+    #[test]
+    fn compile_without_a_graph_propagates_nothing() {
+        let configs: Vec<TransformationConfig> = serde_yaml::from_str(
+            "- collection: users\n  transformers:\n    - field: _id\n      name: hash\n      apply_for_references: true\n",
+        )
+        .unwrap();
+        let (registry, engine) = (Registry::with_builtins(), HashEngine::new("salt"));
+        let plan = TransformationPlan::compile(&configs, &registry, &engine).unwrap();
+        assert!(plan.transformed_fields("orders").is_empty());
+    }
+
+    // An explicitly configured transformation on a referencing field wins over
+    // the inherited one — the operator's own choice is never overridden.
+    #[test]
+    fn explicit_rule_on_a_referencing_field_is_not_overridden() {
+        let configs: Vec<TransformationConfig> = serde_yaml::from_str(
+            "- collection: users\n  transformers:\n    - field: _id\n      name: hash\n      apply_for_references: true\n- collection: orders\n  transformers:\n    - field: user_id\n      name: set_null\n",
+        )
+        .unwrap();
+        let graph = reference_graph(
+            "- collection: orders\n  references:\n    - field: user_id\n      references_collection: users\n",
+        );
+        let (registry, engine) = (Registry::with_builtins(), HashEngine::new("salt"));
+        let plan =
+            TransformationPlan::compile_with_references(&configs, &registry, &engine, &graph)
+                .unwrap();
+
+        assert_eq!(plan.transformed_fields("orders"), vec!["user_id"]);
+        let order = plan
+            .transform(
+                &registry,
+                &engine,
+                "orders",
+                &doc(&[("user_id", Bson::String("u-1".into()))]),
+            )
+            .unwrap();
+        assert_eq!(order.get("user_id"), Some(&Bson::Null));
     }
 
     // Dynamic params resolve per-document at transform time.

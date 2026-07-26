@@ -147,6 +147,11 @@ pub struct Config {
     /// Raw custom-transformer declarations, refined by that feature.
     #[serde(default)]
     pub custom_transformers: serde_yaml::Value,
+    /// Raw virtual-reference declarations (MongoDB enforces no foreign keys, so
+    /// every inter-collection relationship subsetting and transformation
+    /// propagation follow is declared here), refined by the subset features.
+    #[serde(default)]
+    pub virtual_references: serde_yaml::Value,
     /// Raw validate section, refined by the validate features.
     #[serde(default)]
     pub validate: serde_yaml::Value,
@@ -310,6 +315,23 @@ mod tests {
             ..Default::default()
         };
         assert!(empty.resolve_salt().1);
+    }
+
+    // `virtual_references` is a declared key: MongoDB enforces no foreign keys,
+    // so this section is the only way to express a relationship, and before it
+    // existed `deny_unknown_fields` rejected any config that declared one.
+    #[test]
+    fn accepts_virtual_references_section() {
+        let cfg = parse_str(
+            "virtual_references:\n  - collection: orders\n    references:\n      - field: user_id\n        references_collection: users\n",
+        )
+        .unwrap();
+        assert!(!cfg.virtual_references.is_null());
+        // and it round-trips into the typed entries the subset features use.
+        let entries: Vec<crate::subset::VirtualReferenceEntry> =
+            serde_yaml::from_value(cfg.virtual_references).unwrap();
+        assert_eq!(entries[0].collection, "orders");
+        assert_eq!(entries[0].references[0].field, "user_id");
     }
 
     // Acceptance: an unknown key is rejected as an error.

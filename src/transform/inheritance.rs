@@ -91,6 +91,65 @@ pub fn expand_inherited(
     out
 }
 
+/// Expand a configured transformation list with the rules inherited through
+/// `graph`, so `apply_for_references` actually reaches the dump instead of
+/// being a parsed-and-ignored flag.
+///
+/// An inherited rule copies the source rule's transformer name and parameters
+/// and nothing else. `when` and `dynamic_params` are deliberately dropped:
+/// both read fields of the document being transformed, and the referencing
+/// document is a different document in a different collection — carrying them
+/// over would make the two sides diverge, defeating the very consistency this
+/// feature exists to provide.
+pub fn expand_transformation_configs(
+    configs: &[super::apply::TransformationConfig],
+    graph: &ReferenceGraph,
+) -> Vec<super::apply::TransformationConfig> {
+    use super::apply::{TransformationConfig, TransformerRule};
+
+    let explicit: Vec<FieldTransform> = configs
+        .iter()
+        .flat_map(|c| {
+            c.transformers.iter().map(|r| FieldTransform {
+                collection: c.collection.clone(),
+                field: r.field.clone(),
+                transformer_name: r.name.clone(),
+                params: r.params.clone(),
+                apply_for_references: r.apply_for_references,
+                inherited: false,
+            })
+        })
+        .collect();
+
+    let mut out = configs.to_vec();
+    for t in expand_inherited(&explicit, graph)
+        .iter()
+        .filter(|t| t.inherited)
+    {
+        let rule = TransformerRule {
+            field: t.field.clone(),
+            name: t.transformer_name.clone(),
+            params: t.params.clone(),
+            when: None,
+            dynamic_params: Default::default(),
+            // An inherited rule never propagates further: one hop only, or a
+            // reference chain would rewrite collections nobody configured.
+            apply_for_references: false,
+            type_override: None,
+        };
+        match out.iter_mut().find(|c| c.collection == t.collection) {
+            Some(existing) => existing.transformers.push(rule),
+            None => out.push(TransformationConfig {
+                collection: t.collection.clone(),
+                when: None,
+                query: None,
+                transformers: vec![rule],
+            }),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

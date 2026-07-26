@@ -83,12 +83,18 @@ pub struct ValidateArgs {
     /// Preview transformations against sampled documents.
     #[arg(long)]
     pub data: bool,
-    /// Database to sample from.
+    /// Report schema drift between a stored dump and the live database.
     #[arg(long)]
-    pub database: String,
-    /// Collection to sample from.
+    pub schema: bool,
+    /// Dump to compare against with --schema (id or `latest`).
+    #[arg(long, default_value = "latest")]
+    pub dump: String,
+    /// Database to sample from (required by --data, optional filter for --schema).
     #[arg(long)]
-    pub collection: String,
+    pub database: Option<String>,
+    /// Collection to sample from (required by --data, optional filter for --schema).
+    #[arg(long)]
+    pub collection: Option<String>,
     /// Maximum documents to sample.
     #[arg(long, default_value_t = 10)]
     pub rows_limit: usize,
@@ -234,14 +240,11 @@ fn transformation_configs(
     Ok(section.transformation)
 }
 
-/// Parse `dump.subset_conds` (collection -> expression string) into the
-/// per-collection MongoDB filters `Dump.filters` expects, so the condition is
-/// pushed down to the server instead of every document being fetched and
-/// discarded after the fact.
+/// Parse `dump.subset_conds` (collection -> expression string).
 #[cfg_attr(not(feature = "mongo"), allow(dead_code))]
-fn dump_subset_filters(
+fn dump_subset_conds(
     config: &crate::config::Config,
-) -> crate::Result<std::collections::BTreeMap<String, bson::Document>> {
+) -> crate::Result<std::collections::BTreeMap<String, String>> {
     if config.dump.is_null() {
         return Ok(Default::default());
     }
@@ -252,12 +255,78 @@ fn dump_subset_filters(
     }
     let section: DumpSection = serde_yaml::from_value(config.dump.clone())
         .map_err(|e| crate::Error::Config(format!("dump.subset_conds: {e}")))?;
-    section
-        .subset_conds
+    Ok(section.subset_conds)
+}
+
+/// Turn `subset_conds` into the per-collection MongoDB filters `Dump.filters`
+/// expects, so each condition is pushed down to the server instead of every
+/// document being fetched and discarded after the fact. This is the
+/// no-reference-graph path: each collection is filtered independently, with no
+/// guarantee that the result is referentially intact.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn dump_subset_filters(
+    config: &crate::config::Config,
+) -> crate::Result<std::collections::BTreeMap<String, bson::Document>> {
+    dump_subset_conds(config)?
         .into_iter()
         .map(|(collection, expr)| {
             let filter = crate::transform::condition::Condition::parse(&expr)?.to_filter();
             Ok((collection, filter))
+        })
+        .collect()
+}
+
+/// Parse `virtual_references` into the reference graph that referential
+/// subsetting traverses and that transformation propagation
+/// (`apply_for_references`) follows. An absent section yields an empty graph,
+/// which turns both features off.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn reference_graph(config: &crate::config::Config) -> crate::Result<crate::subset::ReferenceGraph> {
+    if config.virtual_references.is_null() {
+        return Ok(Default::default());
+    }
+    let entries: Vec<crate::subset::VirtualReferenceEntry> =
+        serde_yaml::from_value(config.virtual_references.clone())
+            .map_err(|e| crate::Error::Config(format!("virtual_references: {e}")))?;
+    Ok(crate::subset::ReferenceGraph::from_entries(&entries))
+}
+
+/// Every collection the subset governs: one with its own condition, or one the
+/// reference graph mentions on either end. These get an `_id`-membership
+/// filter even when the closure admitted nothing from them — otherwise a
+/// referenced collection that contributed no document would be dumped whole,
+/// silently widening the subset. Collections outside this set are dumped in
+/// full, which is what makes lookup/reference data survive subsetting.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn subset_governed_collections(
+    graph: &crate::subset::ReferenceGraph,
+    conds: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeSet<String> {
+    let mut governed: std::collections::BTreeSet<String> = conds.keys().cloned().collect();
+    for edge in graph.edges() {
+        governed.insert(edge.from_collection.clone());
+        governed.extend(edge.target_collections());
+    }
+    governed
+}
+
+/// Build the `_id`-membership filters from a computed closure. Streaming is
+/// preserved: the dump still reads through the cursor, it just reads only the
+/// documents the closure selected.
+#[cfg_attr(not(feature = "mongo"), allow(dead_code))]
+fn id_membership_filters(
+    governed: &std::collections::BTreeSet<String>,
+    ids: std::collections::BTreeMap<String, Vec<bson::Bson>>,
+) -> std::collections::BTreeMap<String, bson::Document> {
+    governed
+        .iter()
+        .map(|collection| {
+            let selected = ids.get(collection).cloned().unwrap_or_default();
+            let mut membership = bson::Document::new();
+            membership.insert("$in", selected);
+            let mut filter = bson::Document::new();
+            filter.insert("_id", membership);
+            (collection.clone(), filter)
         })
         .collect()
 }
@@ -481,7 +550,10 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
 
     let configs = transformation_configs(&config)?;
     warn_if_default_salt(&config, !configs.is_empty());
-    let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
+    let graph = reference_graph(&config)?;
+    // The graph is what makes `apply_for_references` propagate; without a
+    // declared reference the flag has nothing to follow.
+    let plan = TransformationPlan::compile_with_references(&configs, &registry, &engine, &graph)?;
 
     let (cfg_include_db, cfg_exclude_db, cfg_include_coll, cfg_exclude_coll) =
         dump_filter_lists(&config)?;
@@ -495,6 +567,7 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
         parallel_jobs: args.jobs,
         no_indexes: args.no_indexes,
     };
+    let filters = resolve_dump_filters(&config, &driver, &graph, &options)?;
     let dump = Dump {
         storage: storage.as_ref(),
         source: &driver,
@@ -505,12 +578,80 @@ fn cmd_dump(cli: &Cli, args: &DumpArgs) -> crate::Result<()> {
         } else {
             Some(&plan)
         },
-        filters: dump_subset_filters(&config)?,
+        filters,
         options,
     };
     let meta = dump.run(chrono::Utc::now())?;
     println!("created dump {} ({} bytes)", meta.id, meta.size);
     Ok(())
+}
+
+/// Decide what each collection is filtered by.
+///
+/// With no reference graph, or no `subset_conds`, each condition is simply
+/// pushed down on its own collection. With both, referential subsetting runs
+/// first: it walks the declared references and computes which documents belong
+/// in the subset, keeping only their `_id`s, and the dump then filters on those
+/// — so the dump still streams every collection through a cursor instead of the
+/// closure holding the documents in memory.
+#[cfg(feature = "mongo")]
+fn resolve_dump_filters(
+    config: &crate::config::Config,
+    source: &dyn crate::mongo::MongoSource,
+    graph: &crate::subset::ReferenceGraph,
+    options: &crate::dump::DumpOptions,
+) -> crate::Result<std::collections::BTreeMap<String, bson::Document>> {
+    use crate::subset::{MongoDocumentSource, SubsetEngine};
+
+    let conds = dump_subset_conds(config)?;
+    if graph.edges().is_empty() || conds.is_empty() {
+        return dump_subset_filters(config);
+    }
+
+    let database = subset_database(source, options)?;
+    log::info!("computing referential subset over database {database}");
+    let document_source = MongoDocumentSource::new(source, &database, graph);
+    let ids = SubsetEngine::new(graph, &conds)?.compute_ids(&document_source)?;
+    for (collection, selected) in &ids {
+        log::info!("  {collection}: {} documents in subset", selected.len());
+    }
+    Ok(id_membership_filters(
+        &subset_governed_collections(graph, &conds),
+        ids,
+    ))
+}
+
+/// The single database referential subsetting runs against.
+///
+/// Reference declarations name collections without qualifying them by
+/// database, and the dump's filters are keyed the same way, so a closure
+/// spanning several databases would mix identities from same-named collections.
+/// Rather than silently produce that, require the run to be unambiguous.
+#[cfg(feature = "mongo")]
+fn subset_database(
+    source: &dyn crate::mongo::MongoSource,
+    options: &crate::dump::DumpOptions,
+) -> crate::Result<String> {
+    let candidates: Vec<String> = source
+        .databases()?
+        .into_iter()
+        .filter(|db| {
+            !options.exclude_databases.contains(db)
+                && (options.include_databases.is_empty() || options.include_databases.contains(db))
+        })
+        .collect();
+    match candidates.len() {
+        1 => Ok(candidates.into_iter().next().unwrap()),
+        0 => Err(crate::Error::Config(
+            "referential subsetting found no database to run against; check the include/exclude database filters".into(),
+        )),
+        _ => Err(crate::Error::Config(format!(
+            "referential subsetting needs exactly one database, but {} are selected ({}); \
+             narrow the dump with --include-db",
+            candidates.len(),
+            candidates.join(", ")
+        ))),
+    }
 }
 
 #[cfg(feature = "mongo")]
@@ -573,14 +714,34 @@ fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
     use crate::transform::apply::TransformationPlan;
     use crate::validate::{parse_format, parse_table_format, preview, PreviewOptions, Warnings};
 
-    if !args.data {
-        return Err(crate::Error::Validation(
-            "nothing to do: pass --data to preview transformations".into(),
-        ));
+    match (args.data, args.schema) {
+        (false, false) => {
+            return Err(crate::Error::Validation(
+                "nothing to do: pass --data to preview transformations, or --schema to report schema drift"
+                    .into(),
+            ))
+        }
+        (true, true) => {
+            return Err(crate::Error::Validation(
+                "--data and --schema are separate reports: pass one at a time".into(),
+            ))
+        }
+        (false, true) => return cmd_validate_schema(cli, args),
+        (true, false) => {}
     }
     // Validate output options up front, before any database work.
     let format = parse_format(&args.format)?;
     let table_format = parse_table_format(&args.table_format)?;
+    // clap cannot require these for --data only, so enforce it here rather than
+    // making them mandatory for --schema too, where they are just filters.
+    let (database, collection) = match (&args.database, &args.collection) {
+        (Some(db), Some(coll)) => (db, coll),
+        _ => {
+            return Err(crate::Error::Validation(
+                "--data needs both --database and --collection".into(),
+            ))
+        }
+    };
 
     let config = require_config(cli)?;
     let driver = crate::mongo::MongoDriver::connect(&resolve_uri(cli, &config)?)?;
@@ -590,9 +751,9 @@ fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
     warn_if_default_salt(&config, !configs.is_empty());
     let plan = TransformationPlan::compile(&configs, &registry, &engine)?;
 
-    let docs = driver
-        .read_collection(&args.database, &args.collection)?
-        .documents;
+    // Push the limit down instead of materializing the collection: a preview of
+    // 10 documents must not read a production collection end to end.
+    let docs = driver.read_sample(database, collection, args.rows_limit)?;
     let opts = PreviewOptions {
         rows_limit: args.rows_limit,
         format,
@@ -604,13 +765,51 @@ fn cmd_validate(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
         &plan,
         &registry,
         &engine,
-        &args.collection,
+        collection,
         &docs,
         &Warnings::new(),
         &config.resolved_warnings,
         &opts,
     )?;
     print!("{out}");
+    Ok(())
+}
+
+/// `validate --schema`: compare what a stored dump recorded against what the
+/// live database looks like now, and report the drift.
+#[cfg(feature = "mongo")]
+fn cmd_validate_schema(cli: &Cli, args: &ValidateArgs) -> crate::Result<()> {
+    let config = require_config(cli)?;
+    let storage = crate::storage::open_from_config(&config.storage)?;
+    let driver = crate::mongo::MongoDriver::connect(&resolve_uri(cli, &config)?)?;
+
+    let drift = crate::validate::diff_dump_against_live(
+        storage.as_ref(),
+        &driver,
+        &args.dump,
+        args.database.as_deref(),
+        args.collection.as_deref(),
+    )?;
+
+    if drift.is_empty() {
+        println!(
+            "no schema drift between dump {} and the live database",
+            args.dump
+        );
+        return Ok(());
+    }
+    for line in &drift {
+        println!("{line}");
+    }
+    // Same meaning --strict already carries for the preview: an unresolved
+    // finding fails the command rather than only being printed, so CI can gate
+    // on it.
+    if args.strict {
+        return Err(crate::Error::Validation(format!(
+            "{} schema difference(s) detected (--strict)",
+            drift.len()
+        )));
+    }
     Ok(())
 }
 
@@ -761,6 +960,128 @@ mod tests {
         assert!(filters.is_empty());
     }
 
+    #[cfg(feature = "mongo")]
+    mod subset_filters {
+        use super::*;
+        use crate::dump::DumpOptions;
+        use crate::mongo::{CollectionData, InMemoryMongo};
+        use bson::{Bson, Document};
+
+        fn doc(pairs: &[(&str, Bson)]) -> Document {
+            let mut d = Document::new();
+            for (k, v) in pairs {
+                d.insert(*k, v.clone());
+            }
+            d
+        }
+
+        fn shop() -> InMemoryMongo {
+            let m = InMemoryMongo::new();
+            m.seed(CollectionData {
+                database: "shop".into(),
+                collection: "orders".into(),
+                documents: vec![
+                    doc(&[
+                        ("_id", Bson::Int64(1)),
+                        ("user_id", Bson::Int64(10)),
+                        ("region", Bson::String("EU".into())),
+                    ]),
+                    doc(&[
+                        ("_id", Bson::Int64(2)),
+                        ("user_id", Bson::Int64(20)),
+                        ("region", Bson::String("US".into())),
+                    ]),
+                ],
+                ..Default::default()
+            });
+            m.seed(CollectionData {
+                database: "shop".into(),
+                collection: "users".into(),
+                documents: vec![
+                    doc(&[("_id", Bson::Int64(10))]),
+                    doc(&[("_id", Bson::Int64(20))]),
+                ],
+                ..Default::default()
+            });
+            m
+        }
+
+        // Acceptance: with a declared reference graph, a condition on one
+        // collection pulls the documents the others need — the filters handed
+        // to the dump select order 1 AND the user it references, even though
+        // `users` has no condition of its own.
+        #[test]
+        fn declared_references_make_the_subset_referentially_intact() {
+            let config = crate::config::parse_str(
+                "dump:\n  subset_conds:\n    orders: \"region == 'EU'\"\nvirtual_references:\n  - collection: orders\n    references:\n      - field: user_id\n        references_collection: users\n",
+            )
+            .unwrap();
+            let graph = reference_graph(&config).unwrap();
+            let source = shop();
+            let filters =
+                resolve_dump_filters(&config, &source, &graph, &DumpOptions::default()).unwrap();
+
+            let ids = |collection: &str| -> Vec<Bson> {
+                filters[collection]
+                    .get_document("_id")
+                    .unwrap()
+                    .get_array("$in")
+                    .unwrap()
+                    .clone()
+            };
+            assert_eq!(ids("orders"), vec![Bson::Int64(1)]);
+            assert_eq!(ids("users"), vec![Bson::Int64(10)]);
+        }
+
+        // Without a reference graph the old behaviour stands: each condition is
+        // pushed down on its own collection, and nothing is pulled in.
+        #[test]
+        fn without_a_graph_conditions_are_pushed_down_independently() {
+            let config = crate::config::parse_str(
+                "dump:\n  subset_conds:\n    orders: \"region == 'EU'\"\n",
+            )
+            .unwrap();
+            let graph = reference_graph(&config).unwrap();
+            let source = shop();
+            let filters =
+                resolve_dump_filters(&config, &source, &graph, &DumpOptions::default()).unwrap();
+
+            let mut expected = Document::new();
+            expected.insert("region", "EU");
+            assert_eq!(filters["orders"], expected);
+            assert!(!filters.contains_key("users"));
+        }
+
+        // Reference declarations do not name a database, so a closure spanning
+        // several would mix identities of same-named collections. Refuse rather
+        // than produce that silently.
+        #[test]
+        fn ambiguous_database_selection_is_refused() {
+            let config = crate::config::parse_str(
+                "dump:\n  subset_conds:\n    orders: \"region == 'EU'\"\nvirtual_references:\n  - collection: orders\n    references:\n      - field: user_id\n        references_collection: users\n",
+            )
+            .unwrap();
+            let graph = reference_graph(&config).unwrap();
+            let source = shop();
+            source.seed(CollectionData {
+                database: "warehouse".into(),
+                collection: "orders".into(),
+                ..Default::default()
+            });
+
+            let err = resolve_dump_filters(&config, &source, &graph, &DumpOptions::default())
+                .unwrap_err();
+            assert!(err.to_string().contains("--include-db"), "{err}");
+
+            // narrowing to one database resolves it.
+            let options = DumpOptions {
+                include_databases: vec!["shop".into()],
+                ..Default::default()
+            };
+            assert!(resolve_dump_filters(&config, &source, &graph, &options).is_ok());
+        }
+    }
+
     #[test]
     fn restore_filter_lists_parses_all_four_fields() {
         let config = crate::config::parse_str(
@@ -784,6 +1105,80 @@ mod tests {
         assert!(exclude_coll.is_empty());
         assert!(include_idx.is_empty());
         assert!(exclude_idx.is_empty());
+    }
+
+    #[test]
+    fn reference_graph_parses_declared_references() {
+        let config = crate::config::parse_str(
+            "virtual_references:\n  - collection: orders\n    references:\n      - field: user_id\n        references_collection: users\n",
+        )
+        .unwrap();
+        let graph = reference_graph(&config).unwrap();
+        assert_eq!(graph.edges().len(), 1);
+        assert_eq!(graph.references_from("orders")[0].from_field, "user_id");
+    }
+
+    // No section -> empty graph, which is what turns both referential
+    // subsetting and `apply_for_references` off.
+    #[test]
+    fn reference_graph_defaults_to_empty() {
+        let config = crate::config::parse_str("common:\n  tmp_dir: /tmp\n").unwrap();
+        assert!(reference_graph(&config).unwrap().edges().is_empty());
+    }
+
+    #[test]
+    fn reference_graph_reports_a_malformed_section() {
+        let config =
+            crate::config::parse_str("virtual_references:\n  - collection: orders\n    bogus: 1\n")
+                .unwrap();
+        let err = reference_graph(&config).unwrap_err();
+        assert!(err.to_string().contains("virtual_references"), "{err}");
+    }
+
+    // A collection the graph mentions but that contributed nothing must still
+    // be filtered to nothing — otherwise it would be dumped whole and silently
+    // widen the subset past what the operator asked for.
+    #[test]
+    fn governed_collections_cover_conditions_and_both_ends_of_every_reference() {
+        let graph = {
+            let entries: Vec<crate::subset::VirtualReferenceEntry> = serde_yaml::from_str(
+                "- collection: orders\n  references:\n    - field: user_id\n      references_collection: users\n",
+            )
+            .unwrap();
+            crate::subset::ReferenceGraph::from_entries(&entries)
+        };
+        let conds: std::collections::BTreeMap<String, String> =
+            [("orders".to_string(), "region == 'EU'".to_string())]
+                .into_iter()
+                .collect();
+
+        let governed = subset_governed_collections(&graph, &conds);
+        assert!(governed.contains("orders"));
+        assert!(governed.contains("users"));
+
+        // users admitted nothing -> an empty membership filter, not "no filter".
+        let ids: std::collections::BTreeMap<String, Vec<bson::Bson>> =
+            [("orders".to_string(), vec![bson::Bson::Int64(1)])]
+                .into_iter()
+                .collect();
+        let filters = id_membership_filters(&governed, ids);
+        let users = filters.get("users").expect("users must be filtered");
+        assert!(users
+            .get_document("_id")
+            .unwrap()
+            .get_array("$in")
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            filters
+                .get("orders")
+                .unwrap()
+                .get_document("_id")
+                .unwrap()
+                .get_array("$in")
+                .unwrap(),
+            &vec![bson::Bson::Int64(1)]
+        );
     }
 
     #[test]

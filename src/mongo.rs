@@ -88,6 +88,25 @@ pub trait MongoSource: Sync {
         Ok(())
     }
 
+    /// Like [`Self::stream_documents`], but also asks the source to return only
+    /// the fields named in `projection` (plus whatever the server always
+    /// includes). Used by referential subsetting, which needs nothing but each
+    /// document's `_id` and its reference-bearing fields to compute the closure
+    /// — projecting keeps that pass proportional to the reference graph rather
+    /// than to the documents' real size. The default ignores the projection and
+    /// delegates; real sources should push it down.
+    fn stream_documents_projected(
+        &self,
+        database: &str,
+        collection: &str,
+        filter: Option<&Document>,
+        projection: &[String],
+        f: &mut dyn FnMut(Document) -> Result<()>,
+    ) -> Result<()> {
+        let _ = projection;
+        self.stream_documents(database, collection, filter, f)
+    }
+
     /// Read at most `limit` documents (for previews). The default materializes
     /// then truncates; real sources should push the limit down.
     fn read_sample(&self, database: &str, collection: &str, limit: usize) -> Result<Vec<Document>> {
@@ -234,6 +253,59 @@ impl MongoSource for InMemoryMongo {
                 crate::Error::Mongo(format!("collection {database}.{collection} not found"))
             })
     }
+
+    /// Honours the filter rather than ignoring it, so a caller that relies on
+    /// server-side narrowing (subsetting's reference lookups, an `_id`
+    /// membership filter) is actually exercised by the tests instead of quietly
+    /// getting every document back.
+    fn read_collection_filtered(
+        &self,
+        database: &str,
+        collection: &str,
+        filter: Option<&Document>,
+    ) -> Result<CollectionData> {
+        let mut data = self.read_collection(database, collection)?;
+        if let Some(f) = filter {
+            data.documents.retain(|doc| matches_filter(doc, f));
+        }
+        Ok(data)
+    }
+}
+
+/// The subset of MongoDB query syntax [`InMemoryMongo`] understands: equality
+/// on a (possibly dotted) field, and `$in` / `$nin` membership. Enough to cover
+/// what dump filter pushdown and subsetting actually emit; anything else is
+/// deliberately treated as non-matching rather than silently matching
+/// everything, so an unsupported filter shows up as an empty result in a test
+/// instead of passing by accident.
+fn matches_filter(doc: &Document, filter: &Document) -> bool {
+    filter.iter().all(|(field, expected)| {
+        let actual = get_path(doc, field);
+        match expected {
+            Bson::Document(ops) if ops.keys().any(|k| k.starts_with('$')) => {
+                ops.iter()
+                    .all(|(op, operand)| match (op.as_str(), operand) {
+                        ("$in", Bson::Array(values)) => {
+                            actual.is_some_and(|a| values.iter().any(|v| v == a))
+                        }
+                        ("$nin", Bson::Array(values)) => {
+                            !actual.is_some_and(|a| values.iter().any(|v| v == a))
+                        }
+                        _ => false,
+                    })
+            }
+            _ => actual == Some(expected),
+        }
+    })
+}
+
+fn get_path<'a>(doc: &'a Document, path: &str) -> Option<&'a Bson> {
+    let mut parts = path.split('.');
+    let mut current = doc.get(parts.next()?)?;
+    for part in parts {
+        current = current.as_document()?.get(part)?;
+    }
+    Some(current)
 }
 
 impl MongoSink for InMemoryMongo {
@@ -477,6 +549,43 @@ mod driver {
                 // collection; the cursor hands documents over one at a time.
                 let mut cursor = coll
                     .find(query_filter)
+                    .await
+                    .map_err(|e| Error::Mongo(format!("find: {e}")))?;
+                while cursor
+                    .advance()
+                    .await
+                    .map_err(|e| Error::Mongo(e.to_string()))?
+                {
+                    let doc = cursor
+                        .deserialize_current()
+                        .map_err(|e| Error::Mongo(e.to_string()))?;
+                    f(doc)?;
+                }
+                Ok(())
+            })
+        }
+
+        fn stream_documents_projected(
+            &self,
+            database: &str,
+            collection: &str,
+            filter: Option<&Document>,
+            projection: &[String],
+            f: &mut dyn FnMut(Document) -> Result<()>,
+        ) -> Result<()> {
+            if projection.is_empty() {
+                return self.stream_documents(database, collection, filter, f);
+            }
+            let coll = self.coll(database, collection);
+            let query_filter = filter.cloned().unwrap_or_default();
+            let mut projection_doc = Document::new();
+            for field in projection {
+                projection_doc.insert(field.clone(), 1);
+            }
+            self.rt.block_on(async {
+                let mut cursor = coll
+                    .find(query_filter)
+                    .projection(projection_doc)
                     .await
                     .map_err(|e| Error::Mongo(format!("find: {e}")))?;
                 while cursor
