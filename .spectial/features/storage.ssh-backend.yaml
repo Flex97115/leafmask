@@ -1,14 +1,25 @@
 id: storage.ssh-backend
 name: SSH/SFTP storage backend
-description: "The product can store and read dumps on a remote server over SFTP, configured with host, credentials, and a remote base path."
+description: "The product can store and read dumps on a remote server over SFTP, configured with a host, port, credentials (password or private key), and a remote base path."
 level: infrastructure
 depends_on: []
 acceptance:
-  - "Dumps written with storage.type=ssh are uploaded to the configured remote path over an SFTP connection"
-  - "Restoring, listing, and deleting dumps correctly read and modify files on the remote SFTP path"
-  - "The SFTP connection is established lazily rather than eagerly on every command startup"
+  - "Dumps written with storage.type=ssh are uploaded under the configured remote base path over an SFTP connection"
+  - "A missing `host` is a configuration error naming the missing setting; the port defaults to 22 when not configured"
+  - "Authentication works either by password or by private-key file"
+  - "Restoring, listing, and deleting dumps correctly read and modify files on the remote path"
+  - "The SFTP session is opened lazily on first use, not eagerly at command startup, so a command that never touches storage never pays for a connection"
 code:
   - "src/storage/ssh.rs"
 tests:
   - "src/storage/ssh.rs"
+notes: |
+  Config keys read from the `storage` section: host (required), port
+  (default 22), username, password, private_key, base_path.
+  Config parsing and remote-path layout are pure and always compiled/tested;
+  the `ssh2` session is behind the `ssh` cargo feature, which vendors OpenSSL so
+  no system libssl is required on any target. There is no automated live-SFTP
+  test — that path is exercised manually only, hence the lower confidence.
+  This backend does not offer a multipart writer, so a dump to SFTP takes the
+  local-spool-then-upload path instead of a streaming upload.
 confidence: medium

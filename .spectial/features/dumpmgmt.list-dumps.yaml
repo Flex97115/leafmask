@@ -1,20 +1,24 @@
 id: dumpmgmt.list-dumps
 name: List dumps in storage
-description: "The operator can list all dumps currently held in the configured storage, with their ID, status, and size."
+description: "The operator can list every dump held in the configured storage with its id, completion status, and size."
 level: user-facing
 access:
   actors: [operator]
   authentication: required
+  notes: "Requires whatever credentials the configured storage backend needs; no MongoDB connection is involved."
 depends_on:
-  - storage.backend-selection
+  - dump.storage-format
 acceptance:
-  - "Running list-dumps against a storage containing dumps prints each dump's ID and completion status"
-  - "An empty storage produces an empty (not erroring) listing"
+  - "Listing a storage containing dumps prints one line per dump with its id, status, and size in bytes"
+  - "Dumps are listed in id order, which for timestamp-derived ids is chronological"
+  - "An empty storage produces an empty listing rather than an error"
+  - "A dump whose metadata is missing or unreadable is still listed, with unknown status, instead of failing the whole listing"
 code:
-  - "src/dump/mod.rs"
   - "src/dump/management.rs"
   - "src/cli.rs"
 tests:
   - "src/dump/management.rs"
-  - "src/dump/mod.rs"
+api:
+  - "leafmask list-dumps"
+notes: "Available in the default build — no MongoDB feature required."
 confidence: high

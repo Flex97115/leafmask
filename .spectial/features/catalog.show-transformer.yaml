@@ -1,19 +1,24 @@
 id: catalog.show-transformer
-name: Show transformer details
-description: "The operator can look up one transformer by name and see its full documentation: description, parameters, parameter types, and defaults, to know how to configure it correctly."
+name: Show one transformer's documentation
+description: "The operator can look one transformer up by name and see its description and every parameter it takes, with each parameter's type and whether it is required, in order to configure it correctly."
 level: user-facing
 access:
   actors: [operator]
   authentication: none
+  notes: "Reads only the local config file; needs neither a database nor a storage backend, and works with no config at all."
 depends_on:
   - transform.builtin-transformers
   - transform.custom-transformers
 acceptance:
-  - "Requesting show-transformer for a known transformer name prints its parameters, their types, and whether they are required"
-  - "Requesting show-transformer for an unknown name fails with a clear 'not found' error"
+  - "Showing a known transformer prints its name, description, and one line per parameter with the parameter's name, type, required/optional status, and description"
+  - "A transformer that takes no parameters is rendered explicitly as having none, not as an empty section"
+  - "A custom transformer declared in the config can be shown the same way, including its own declared typed parameters"
+  - "Showing an unknown name fails with a clear not-found error naming what was asked for"
 code:
   - "src/catalog.rs"
   - "src/cli.rs"
 tests:
   - "src/catalog.rs"
+api:
+  - "leafmask show-transformer <name>"
 confidence: high

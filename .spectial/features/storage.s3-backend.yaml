@@ -1,14 +1,28 @@
 id: storage.s3-backend
 name: S3-compatible storage backend
-description: "The product can store and read dumps in an S3-compatible object storage service (AWS S3, MinIO, GCS, etc.), configured with bucket, region, and credentials."
+description: "The product can store and read dumps in an S3-compatible object store (AWS S3, MinIO, GCS…), configured with a bucket, an optional region, key prefix, credentials, and an optional endpoint override."
 level: infrastructure
-depends_on: []
+depends_on:
+  - storage.streaming-multipart-upload
 acceptance:
-  - "Dumps written with storage.type=s3 are uploaded as objects under the configured bucket and key prefix"
+  - "Dumps written with storage.type=s3 are uploaded as objects under the configured bucket, beneath the configured key prefix"
+  - "A missing `bucket` is a configuration error naming the missing setting"
   - "Restoring, listing, and deleting dumps correctly read and modify objects in that bucket"
-  - "S3-compatible endpoints other than AWS (e.g. MinIO) can be targeted via an explicit endpoint override"
+  - "S3-compatible endpoints other than AWS (e.g. MinIO) can be targeted with an explicit endpoint override, with path-style addressing selectable"
+  - "Writing a collection blob uses a streaming multipart upload that overlaps with the dump instead of assembling the whole object first"
+  - "Reading a blob streams it to a local spool file and hands back a reader over that file, so restoring a huge collection never holds it in memory"
 code:
   - "src/storage/s3.rs"
 tests:
   - "src/storage/s3.rs"
+  - "tests/s3_integration.rs"
+implementation:
+  performance: "Uploads go through the shared streaming multipart writer with an S3 part sink; downloads spool to a temp file rather than buffering the object."
+notes: |
+  Config keys read from the `storage` section: bucket (required), region,
+  endpoint, prefix, access_key_id, secret_access_key, force_path_style.
+  Config parsing and object-key layout are pure and always compiled/tested; the
+  AWS SDK network I/O is behind the `s3` cargo feature. `tests/s3_integration.rs`
+  exercises a real multipart round trip against MinIO via testcontainers and
+  needs the separate `integration-tests` feature plus a running Docker daemon.
 confidence: high

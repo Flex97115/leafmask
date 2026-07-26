@@ -1,14 +1,24 @@
 id: transform.hash-engine
 name: Deterministic hash-based value generation
-description: "The product derives pseudo-random replacement values from a deterministic hash of the original value and a configured seed/salt, so masking a given input always produces the same output across separate dump runs."
+description: "The product derives every pseudo-random replacement value from a hash of the original value and a configured salt, so masking a given input always yields the same output — across runs, machines, and parallel workers."
 level: infrastructure
 depends_on: []
 acceptance:
-  - "The same input value and salt always produce the same generated output, regardless of when or on which machine the dump runs"
-  - "Different salts or seeds produce different output for the same input"
-  - "The generator can project a hash into different target ranges/types (int64, bytes) needed by higher-level transformers"
+  - "The same input and the same salt always produce the same output, regardless of when, where, or on which thread the generation runs"
+  - "Different salts produce different output for the same input"
+  - "The hash can be projected into the shapes higher-level transformers need: raw bytes of any requested length, an unsigned 64-bit integer, a non-negative signed 64-bit integer, an inclusive integer range, and an index into a list"
+  - "Byte output longer than one digest stays deterministic, by extending the stream with a counter rather than by any stateful generator"
+  - "A projection into an inclusive range always lands within the bounds and, over many inputs, covers the whole span; a degenerate range returns its lower bound"
+  - "An index projection always lands inside the list, and an empty list yields index zero rather than a panic"
 code:
   - "src/hash.rs"
 tests:
   - "src/hash.rs"
-confidence: medium
+implementation:
+  notes: "Determinism comes purely from SHA-256(salt || input): there is no RNG, no time input, and no shared mutable state — which is what makes the engine safe to share across the dump's worker threads."
+notes: |
+  Byte-stream extension for lengths above 32 bytes hashes
+  SHA-256(salt || input || counter) blocks, counter starting at 0.
+  The signed projection is the unsigned one shifted right by one bit, so it is
+  always non-negative and safe to use as a magnitude or index.
+confidence: high

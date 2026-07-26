@@ -1,21 +1,26 @@
 id: dumpmgmt.show-dump
-name: Show dump metadata / table of contents
-description: "The operator can inspect the detailed metadata and table of contents of one dump (by ID, or 'latest'): the databases, collections, indexes, and document counts it contains, and the order in which they will be restored."
+name: Show a dump's metadata and table of contents
+description: "The operator can inspect one dump — by id or `latest` — and see its status, creation time, size, and the databases, collections, document counts, indexes, and restore order it contains."
 level: user-facing
 access:
   actors: [operator]
   authentication: required
+  notes: "Requires whatever credentials the configured storage backend needs; no MongoDB connection is involved."
 depends_on:
-  - storage.backend-selection
+  - dump.storage-format
 acceptance:
-  - "Requesting show-dump for an existing dump ID prints its table of contents (databases, collections, indexes, ordering) and metadata"
-  - "Requesting show-dump with 'latest' resolves to the most recently completed dump"
-  - "Requesting a nonexistent dump ID fails with a clear error"
+  - "Showing an existing dump id prints its status, creation timestamp, size, and per-database table of contents"
+  - "Each collection is shown with its document count, index count, restore position, and the names of its indexes, ordered by restore position"
+  - "Showing `latest` resolves to the most recently created dump whose status is done"
+  - "Showing a nonexistent dump id fails with a clear not-found error naming the id"
 code:
-  - "src/dump/mod.rs"
   - "src/dump/management.rs"
+  - "src/dump/mod.rs"
   - "src/cli.rs"
 tests:
   - "src/dump/management.rs"
   - "src/dump/mod.rs"
-confidence: medium
+api:
+  - "leafmask show-dump <id|latest>"
+notes: "Available in the default build — no MongoDB feature required."
+confidence: high

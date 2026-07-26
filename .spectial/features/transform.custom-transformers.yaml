@@ -1,15 +1,36 @@
 id: transform.custom-transformers
 name: Custom/external transformers
-description: "The operator can extend the transformation engine with their own transformers, implemented either as an external command/process communicating over stdin/stdout in any programming language, or as a Go text-template, declared under custom_transformers in the config file."
+description: "The operator can extend the transformation engine with their own transformers, declared in the config either as an external command spoken to over stdin/stdout in any language, or as a placeholder template."
 level: internal
 depends_on:
   - transform.parameter-framework
 acceptance:
-  - "A custom_transformers entry with a command driver spawns the configured executable and exchanges documents with it over stdin/stdout for each transformed record"
-  - "A record that fails to be produced by the external process within the expected exit code causes the transformation (and dump) to fail with a clear error"
-  - "Custom transformers appear in the transformer catalog alongside built-in ones and can declare their own typed parameters"
+  - "A command-driver custom transformer spawns the configured executable once and exchanges one record per line with it over stdin/stdout, reusing the same live process for every subsequent record"
+  - "A template-driver custom transformer renders its configured template against the current document"
+  - "Custom transformers are registered alongside the built-ins, appear in the catalog the same way, and can declare their own typed parameters"
+  - "A custom transformer with an unknown driver, a command driver with no command, or a template driver with no template is rejected as a configuration error naming the transformer"
+  - "An external process that exits or produces no output for a record fails the transformation with an error naming the offending transformer, rather than silently producing a null"
+  - "Output the external process produces that cannot be decoded is a clear error, not a silently mangled value"
+  - "The external process is terminated when its transformer is dropped, so a failed or finished dump leaves no orphan process behind"
 code:
   - "src/transform/custom.rs"
 tests:
   - "src/transform/custom.rs"
+notes: |
+  Config shape under `custom_transformers`: a list of
+  `{name, description?, driver, command?, template?, parameters?}` where driver
+  is `command` or `template`, and each parameter is `{name, type, required?}`
+  with type one of int/float/bool/objectId/datetime (anything else is treated
+  as string).
+
+  Wire protocol for the `command` driver — one line per record, both ways:
+  the field's value is serialized as a single JSON value and written with a
+  trailing newline; the process must answer with exactly one JSON value on one
+  line, which becomes the new field value. The mapping is scalar-only plus
+  arrays and objects; BSON types with no JSON equivalent (ObjectId, DateTime,
+  Decimal128, Binary) are sent as their string rendering and therefore come
+  back as strings. Access is serialized behind a lock, so the persistent
+  process sees one record at a time even under a parallel dump.
+  This differs from the length-framed BSON protocol of the tool this product
+  base was extracted from — see .spectial/regeneration-gaps.md.
 confidence: high

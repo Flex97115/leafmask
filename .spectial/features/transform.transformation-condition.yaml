@@ -1,15 +1,48 @@
 id: transform.transformation-condition
 name: Conditional transformation
-description: "The operator can restrict a transformer (or an entire collection's transformation entry) to only apply when a configured expression evaluates true for the current document, via a `when` condition."
+description: "The operator can gate a transformer, or a whole collection's transformation entry, behind a `when` expression over the document's own fields, so it only applies to the documents that match."
 level: internal
-depends_on:
-  - transform.parameter-framework
+depends_on: []
 acceptance:
-  - "A transformer with a `when` expression only runs for documents where the expression evaluates truthy; other documents pass through unmodified for that transformer"
-  - "A collection-level `when` expression can skip transformation for the whole document"
-  - "The condition expression can reference the document's own field values"
+  - "A transformer carrying a `when` expression runs only for documents where the expression is truthy; for the others that field passes through unmodified"
+  - "A collection-level `when` expression that is false leaves the whole document unmodified, skipping every transformer on it"
+  - "Expressions address the document's own fields, including nested ones by dotted path; an absent field compares as null rather than erroring"
+  - "An empty expression is rejected at configuration time"
+  - "Numeric comparisons coerce across integer and floating-point forms, so an integer field compares correctly against a float literal and vice versa"
+  - "A datetime field can be compared against a quoted RFC3339 literal, on both equality and ordering"
+  - "The same expression can be translated into a native MongoDB filter, so a condition used for document selection is pushed to the server instead of being evaluated over every fetched document"
+  - "A quoted RFC3339 literal becomes a real datetime value in the translated filter — including inside a list — so a date comparison actually matches server-side instead of comparing against a string"
+  - "A word operator only matches on identifier boundaries, so a field name that merely contains an operator as a substring is not misparsed"
 code:
   - "src/transform/condition.rs"
 tests:
   - "src/transform/condition.rs"
-confidence: medium
+notes: |
+  Complete expression grammar as implemented — this is the whole surface,
+  and it is deliberately a subset of the expression language of the tool this
+  product base came from (see .spectial/regeneration-gaps.md):
+
+    term    := <path> <cmp> <literal>
+             | <path> ("in" | "not in") "[" <literal> ("," <literal>)* "]"
+             | <path>                          (bare field -> truthiness)
+    cmp     := "==" | "!=" | ">=" | "<=" | ">" | "<"
+    expr    := term (" and " term)* (" or " ...)*     -- `and` binds tighter
+    path    := field ("." field)*
+    literal := 'quoted' | "quoted" | true | false | null | int | float
+             | bare-token (falls back to a string)
+
+  NOT supported: parentheses, arithmetic, negation of a whole term, functions,
+  regex operators, comparisons between two fields.
+
+  Truthiness for a bare field: false for absent, null, false, empty string, and
+  numeric zero; true otherwise. The translated MongoDB filter reproduces this as
+  `{$exists: true, $nin: [null, false, 0, ""]}`.
+
+  Operator-to-MongoDB mapping used by the translation: `==` -> direct equality,
+  `!=` -> $ne, `>` -> $gt, `<` -> $lt, `>=` -> $gte, `<=` -> $lte,
+  `in` -> $in, `not in` -> $nin, `and` -> $and, `or` -> $or (a single-term
+  group is emitted unwrapped).
+
+  Splitting and operator search are quote-aware, so a separator or operator
+  inside a quoted literal is never treated as syntax.
+confidence: high

@@ -1,13 +1,29 @@
 id: storage.azure-backend
 name: Azure Blob storage backend
-description: "The product can store and read dumps in an Azure Blob Storage container."
+description: "The product can store and read dumps as blobs in an Azure Blob Storage container, against the public cloud or an Azurite emulator."
 level: infrastructure
-depends_on: []
+depends_on:
+  - storage.streaming-multipart-upload
 acceptance:
-  - "Dumps written with storage.type=azure are uploaded as blobs under the configured container"
+  - "Dumps written with storage.type=azure are uploaded as blobs under the configured container, beneath the configured blob-name prefix"
+  - "A missing `container` is a configuration error naming the missing setting"
   - "Restoring, listing, and deleting dumps correctly read and modify blobs in that container"
+  - "Pointing the backend at an emulator host uses the emulator's well-known development credentials and ignores the configured account and access key"
+  - "Writing a collection blob uses a streaming block upload that overlaps with the dump instead of assembling the whole blob first"
 code:
   - "src/storage/azure.rs"
 tests:
   - "src/storage/azure.rs"
+  - "tests/azure_integration.rs"
+implementation:
+  performance: "Uploads go through the shared streaming multipart writer with an Azure block-blob part sink: each part is a staged block, completion is a put-block-list."
+notes: |
+  Config keys read from the `storage` section: container (required), account,
+  access_key (account key or SAS token), prefix, emulator_host, emulator_port
+  (defaults to 10000, Azurite's blob-service port, when emulator_host is set).
+  Config parsing and blob-name layout are pure and always compiled/tested; the
+  Azure SDK network I/O is behind the `azure` cargo feature.
+  `tests/azure_integration.rs` runs a real block-upload round trip against
+  Azurite via testcontainers and needs the `integration-tests` feature plus a
+  running Docker daemon.
 confidence: high

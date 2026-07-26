@@ -1,23 +1,45 @@
 id: validate.transformation-preview
-name: Validate and preview transformations without dumping
-description: "The operator can run configured transformations against a limited sample of documents and see a before/after diff, in text or JSON, without producing a real dump — to check that the transformation config behaves as intended before running it for real."
+name: Preview transformations against live data without dumping
+description: "The operator can run the configured transformations against a limited sample of a live collection and see the before/after value of each field, in text or JSON, without producing a dump."
 level: user-facing
 access:
   actors: [operator]
   authentication: required
+  notes: "Read-only against MongoDB; needs no storage backend, since nothing is written."
 depends_on:
+  - config.loading
+  - mongo.access-layer
   - transform.apply-transformations
-  - validate.schema-diff
   - validate.warnings
 acceptance:
-  - "Running validate with --data on a collection shows the original and transformed value for each sampled field, up to --rows-limit documents"
-  - "Output can be requested in text or JSON format, and per-document diffs can be shown in a vertical or horizontal table layout"
-  - "--transformed-only restricts the preview to fields that actually have a transformer configured"
-  - "An invalid --format or --table-format value fails fast with a clear error before any DB work happens"
-  - "--strict makes any unresolved validation warning fail the command with a non-zero exit code instead of just printing a warning"
+  - "Previewing a named database and collection shows, per sampled document, each field's original and transformed value, marking the ones that changed"
+  - "At most the requested number of documents is sampled (default 10)"
+  - "Output can be text or JSON, and text output can lay each document out vertically (one line per field) or horizontally (a field/before/after row set)"
+  - "Restricting to transformed fields shows only the fields that actually have a transformer configured, hiding the rest"
+  - "An invalid output format or layout fails immediately, before any database connection is opened"
+  - "A data preview without both a database and a collection is an explicit error naming what is missing"
+  - "Invoking the command without asking for any report, or asking for both the data preview and the schema report at once, is an explicit error rather than a silent no-op"
+  - "Only the requested number of documents is read from the database, not the whole collection"
+  - "In strict mode, any unresolved validation warning fails the command instead of merely being reported"
+  - "When transformations are configured but no salt is, the operator is warned that the preview reflects reversible anonymization"
 code:
   - "src/cli.rs"
   - "src/validate/preview.rs"
+  - "src/validate/mod.rs"
 tests:
   - "src/validate/preview.rs"
-confidence: medium
+api:
+  - "leafmask validate --data --database DB --collection COLL [--rows-limit N] [--format text|json] [--table-format vertical|horizontal] [--transformed-only] [--strict]"
+notes: |
+  `validate` carries two mutually exclusive reports: `--data` (this feature) and
+  `--schema` (validate.schema-diff). `--database`/`--collection` are therefore
+  optional at the flag level and required by this mode specifically, which the
+  command enforces itself with an explicit message.
+  The sample is read through the source's bounded-sample entry point, which the
+  real driver pushes down as a server-side limit, so previewing a production
+  collection reads only the requested documents.
+  Strict mode is wired but currently always evaluates against an empty warning
+  set, so it can only fail once detection rules exist — see validate.warnings.
+  Compiled only with the `mongo` cargo feature; without it, invoking it fails
+  fast with a message telling the operator to rebuild.
+confidence: high

@@ -1,0 +1,29 @@
+id: storage.streaming-multipart-upload
+name: Streaming multipart upload to cloud storage
+description: "The product uploads a dump blob to cloud storage in parts on a background thread while the dump is still producing documents, instead of assembling the whole blob first, so a collection of any size uploads in bounded memory and overlapping time."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "Bytes written to the blob are buffered into parts and each completed part is handed off for upload as soon as it is full, before the writer is finished — the upload overlaps with the writing"
+  - "Part size starts at 8 MiB and doubles every 1000 parts sent, capped at 24 doublings, so an arbitrarily large blob stays under the 10,000-part ceiling without knowing the total size upfront"
+  - "Finishing the writer flushes the trailing partial part, waits for every in-flight part, completes the upload, and reports the total byte count written"
+  - "A blob to which nothing was ever written still uploads exactly one (empty) part, because completion with zero parts is rejected by the target services"
+  - "A part that fails to upload aborts the whole upload server-side, and the original failure — not a generic downstream one — surfaces to the caller when the writer is finished"
+  - "Aborting instead of finishing cancels whatever was started server-side and is safe to call even when nothing was ever written"
+code:
+  - "src/storage/multipart.rs"
+  - "src/storage/mod.rs"
+tests:
+  - "src/storage/multipart.rs"
+implementation:
+  concurrency: "One dedicated background upload thread per blob, fed over a bounded sync channel (capacity 2), so the writing side blocks rather than growing unbounded when the network is slower than the dump."
+  reliability: "Any part failure aborts the upload on the background thread; the abort path is also taken when the writer is dropped without being finished, so an error mid-dump never leaves a dangling multipart upload."
+  performance: "Memory stays bounded at roughly one part size plus the channel depth, regardless of collection size."
+notes: |
+  Backend-agnostic: a backend plugs in by implementing a part sink
+  (send one numbered part -> opaque token; complete from the ordered tokens;
+  abort). S3 maps this to UploadPart/CompleteMultipartUpload/AbortMultipartUpload,
+  Azure to stage-block/put-block-list. Backends that do not implement it
+  (directory, ssh) simply return no writer and the caller falls back to
+  spool-to-local-file-then-upload.
+confidence: high

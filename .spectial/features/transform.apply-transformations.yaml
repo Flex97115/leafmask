@@ -1,6 +1,6 @@
 id: transform.apply-transformations
-name: Apply configured transformations during dump
-description: "The product transforms document field values while dumping, according to per-collection, per-field transformer rules declared in the config file, so the resulting dump is anonymized/masked instead of a verbatim copy of production data."
+name: Apply configured transformations while dumping
+description: "The product rewrites document field values as they stream out of MongoDB, following the per-collection, per-field transformer rules declared in the config, so a dump is anonymized rather than a verbatim copy of production data."
 level: internal
 depends_on:
   - transform.builtin-transformers
@@ -8,14 +8,33 @@ depends_on:
   - transform.parameter-framework
   - transform.dynamic-parameters
   - transform.transformation-condition
-  - transform.transformation-inheritance
 acceptance:
-  - "For each collection listed under dump.transformation, the configured transformers run on the matching fields while streaming documents out of MongoDB"
-  - "Documents in collections without a matching transformation entry are dumped unmodified"
-  - "A collection can be restricted to a subset of documents via a custom filter query before transformation is applied"
-  - "Field types can be overridden so a transformer can operate on a different logical type than the field's native BSON type"
+  - "The whole configuration is compiled into an executable plan once, before any document is read, so a bad transformer name, an invalid parameter, an unknown type override, or a malformed condition fails before the dump touches data"
+  - "For each configured collection, each rule's transformer runs on its target field as documents stream by; collections with no entry are dumped unmodified"
+  - "A target field is addressed by dotted path, and writing a dotted path creates the intermediate embedded documents it needs"
+  - "A field absent from a document is presented to its transformer as null rather than skipped"
+  - "A rule can override the field's logical type before the transformer runs, so a transformer can operate on a type other than the field's native one"
+  - "A collection can carry a query restricting which of its documents are dumped at all, independently of which fields get transformed"
+  - "The plan can report which fields have a transformer configured for a given collection, which is what drives the preview's transformed-only view"
 code:
   - "src/transform/apply.rs"
 tests:
   - "src/transform/apply.rs"
-confidence: medium
+  - "src/dump/create.rs"
+implementation:
+  performance: "Rules with only static parameters are built once at compile time and reused for every document; only rules with dynamic parameters are rebuilt per document. The compiled plan is shared read-only across the dump's worker threads."
+notes: |
+  Config shape under `dump.transformation`: a list of
+  `{collection, when?, query?, transformers: [...]}` where each transformer rule
+  is `{field|column, name, params?, when?, dynamic_params?,
+  apply_for_references?, type_override?}`. Unknown keys in either shape are
+  rejected.
+
+  Two distinct filtering mechanisms coexist and must not be conflated:
+  the collection-level `query` is an offline, equality-only matcher applied per
+  document in the dump loop, while `dump.subset_conds` is compiled to a native
+  MongoDB filter and pushed to the server. A collection can carry both.
+
+  `apply_for_references` is parsed on a rule here but never consumed by this
+  plan — see transform.transformation-inheritance.
+confidence: high

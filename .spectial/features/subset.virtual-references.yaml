@@ -1,14 +1,41 @@
 id: subset.virtual-references
-name: Virtual (non-FK) reference declaration
-description: "The operator can declare relationships between collections — since MongoDB does not enforce foreign keys in the schema, this is the sole mechanism for expressing them, including polymorphic relationships — so dumping and subsetting can traverse them like a relational database traverses foreign keys."
+name: Virtual (non-enforced) reference declaration
+description: "Relationships between collections are declared explicitly — MongoDB enforces no foreign keys, so a declaration is the only way to express them — and become the edges of a dependency graph that subsetting and transformation propagation can follow."
 level: internal
 depends_on: []
 acceptance:
-  - "A virtual_references entry declaring a relationship between two collections is treated by the dependency graph as a reference to follow"
-  - "A virtual reference can be marked not_null to affect how strictly the subsetting engine must satisfy it"
-  - "A virtual reference with polymorphic_exprs can point to different target collections depending on a discriminator expression"
+  - "A declared relationship between a holding collection's field and a target collection becomes a directed edge of the graph, with the referenced field defaulting to the document id when not specified"
+  - "A reference can be marked as required (non-null), and that marking is preserved on the edge"
+  - "A polymorphic reference declares several discriminator cases and resolves, per document, to the collection whose case matches the document's discriminator value"
+  - "A polymorphic reference exposes every collection it could point at, so the graph can be built without a document in hand"
+  - "A polymorphic reference resolves to nothing when no declared case matches the document, rather than guessing a target"
+  - "A reference declaring neither a fixed target nor any polymorphic case is inert and contributes no edge"
+  - "Outgoing references can be looked up by holding collection, which is the traversal primitive both subsetting and propagation use"
 code:
   - "src/subset/virtual_references.rs"
+  - "src/subset/mod.rs"
+  - "src/config.rs"
+  - "src/cli.rs"
 tests:
   - "src/subset/virtual_references.rs"
-confidence: medium
+  - "src/config.rs"
+  - "src/cli.rs"
+notes: |
+  Declaration shape the parser accepts (a list of entries):
+    - collection: <holding collection>
+      references:
+        - field: <field on the holding collection>
+          references_collection: <target>        # omitted when polymorphic
+          references_field: <target field>       # default "_id"
+          not_null: <bool>                       # default false
+          polymorphic_exprs:
+            - {field: <discriminator>, value: <literal>, references_collection: <target>}
+
+  Declared under the top-level `virtual_references` key. An absent section
+  yields an empty graph, which turns off both referential subsetting and
+  transformation propagation; a malformed one is a configuration error naming
+  the section.
+  Polymorphic targets are modelled as `field == value -> collection` cases,
+  which covers the discriminator use of the free-form expressions in the tool
+  this product base came from — see .spectial/regeneration-gaps.md.
+confidence: high

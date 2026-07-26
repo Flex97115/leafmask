@@ -1,13 +1,41 @@
 id: validate.schema-diff
 name: Schema drift detection
-description: "The operator can have validate compare the live database's collection structure (indexes, JSON Schema validators, collection options) against what is recorded in storage/config, to catch drift (e.g. a renamed or dropped index, a changed validator) before it silently breaks a transformation rule."
-level: internal
-depends_on: []
+description: "The operator can compare what a stored dump recorded against the live database now and see the drift — indexes added, removed, or redefined, a changed validator, changed collection options — so drift is caught before it silently breaks a transformation rule or a restore."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+  notes: "Read-only on both sides: needs the storage backend's credentials to read the dump and a MongoDB connection to read the live structure. Nothing is written."
+depends_on:
+  - config.loading
+  - mongo.access-layer
+  - dump.storage-format
 acceptance:
-  - "Running validate with --schema fetches the remote storage's recorded collection structure and diffs it against the live database's indexes and validators"
-  - "A detected schema difference is reported to the operator rather than allowed to fail silently later in a dump"
+  - "Comparing a dump against the live database reports one readable line per difference, naming the database, the collection, and the specific index or option involved"
+  - "An index recorded but absent live is reported as removed, and an index present live but not recorded is reported as added"
+  - "An index present on both sides with different keys or a different uniqueness setting is reported as changed"
+  - "A differing validator is reported, and so is each collection option whose value differs on one side"
+  - "Identical structures produce no drift at all — no false positives — and the operator is told so explicitly rather than getting silence"
+  - "A collection the dump recorded that no longer exists live is drift (everything it had is gone), not an error"
+  - "A structure read that fails for any other reason propagates, so a connection problem is never silently rendered as 'everything was dropped'"
+  - "The comparison defaults to the most recent completed dump and can be pointed at a specific dump id"
+  - "The comparison can be narrowed to one database and/or one collection"
+  - "In strict mode any detected drift fails the command with a non-zero exit, so a pipeline can gate on it; otherwise the drift is reported and the command succeeds"
+  - "Asking for neither report, or for both at once, is an explicit error rather than a silent no-op"
 code:
   - "src/validate/schema_diff.rs"
+  - "src/validate/mod.rs"
+  - "src/cli.rs"
 tests:
   - "src/validate/schema_diff.rs"
-confidence: medium
+api:
+  - "leafmask validate --schema [--dump <id|latest>] [--database DB] [--collection COLL] [--strict]"
+notes: |
+  Comparison is exact on keys (ordered field/direction pairs), uniqueness, the
+  validator document, and each option value; index identity is by name.
+  The index type this feature defines is load-bearing well beyond drift
+  detection — it is the index representation the dump records, the restore
+  recreates, and the driver reads back, which is why it lives here.
+  The command is compiled only with the `mongo` cargo feature; without it,
+  invoking it fails fast with a message telling the operator to rebuild.
+confidence: high

@@ -1,14 +1,21 @@
 id: storage.directory-backend
 name: Local directory storage backend
-description: "The product can store and read dumps on the local filesystem under a configured directory path."
+description: "The product can store and read dumps on the local filesystem under a configured directory path, one subdirectory per dump."
 level: infrastructure
 depends_on: []
 acceptance:
-  - "Dumps written with storage.type=directory land under the configured directory path, one subdirectory per dump ID"
+  - "Dumps written with storage.type=directory land under the configured path, one subdirectory per dump id, and the root directory is created if missing"
+  - "A missing `path` is a configuration error naming the missing setting"
   - "Restoring, listing, and deleting dumps correctly read and modify files under that directory"
+  - "A path segment that would escape the storage root (`..`, `.`, empty) is dropped when resolving, so a crafted dump id, database, or collection name can never write outside the configured root"
+  - "Reading a blob streams from the file and writing a finished local file transfers it without buffering the whole blob in memory"
 code:
-  - "src/storage/mod.rs"
   - "src/storage/directory.rs"
 tests:
   - "src/storage/directory.rs"
+implementation:
+  performance: "Overrides both `get_reader` (streams straight off disk) and `put_file` (transfers the spool file without reading it into memory), so a collection blob of any size costs bounded memory."
+notes: |
+  Always compiled — this is the only backend available in the default build, and
+  the one every unit test that needs real storage uses.
 confidence: high

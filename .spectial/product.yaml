@@ -1,42 +1,45 @@
 name: Leafmask
-description: "A stateless CLI tool for logical MongoDB database dumping, deterministic data anonymization, synthetic data generation, referentially-intact subsetting, and restoration."
+description: "A stateless CLI tool for logical MongoDB database dumping, deterministic data anonymization, referentially-intact subsetting, and restoration."
 version: 0.1.0
 source:
-  repo: https://github.com/greenmaskio/greenmask
-  extracted_at: "2026-07-18"
+  repo: https://github.com/Flex97115/leafmask
+  commit: "4a067eba6928f3d9eed1a8a4d86ace8296efe1c9"
+  extracted_at: "2026-07-24"
 stack:
-  - "Rust 2021 (rustc 1.97)"
-  - "MongoDB access behind MongoSource/MongoSink traits, with a real mongodb-crate adapter (MongoDriver) behind the optional `mongo` feature, covered by live integration tests"
-  - "clap (CLI) / serde + serde_yaml (config)"
-  - "bson, sha2, flate2, regex, chrono"
-  - "Storage: local directory (default); S3 (aws-sdk-s3), Azure Blob, SFTP (ssh2) behind optional cargo features"
+  - "Rust 2021 (single crate: lib + `leafmask` binary)"
+  - "clap 4 (derive) for the CLI; serde + serde_yaml 0.9 for the single YAML config"
+  - "bson 2 as the document model; sha2 (determinism), hex, flate2 (gzip), regex, chrono, log/env_logger"
+  - "MongoDB access behind the MongoSource/MongoSink traits; the real adapter (MongoDriver, mongodb 3 + tokio) is behind the optional `mongo` feature, an InMemoryMongo fake backs the unit tests"
+  - "Storage: local directory (always compiled); S3 (aws-sdk-s3), Azure Blob (azure_storage_blobs), SFTP (ssh2, vendored OpenSSL) behind the optional `s3`/`azure`/`ssh` features; `full` = all four"
 conventions:
-  - "MongoDB is accessed through the MongoSource/MongoSink traits (no wrapped mongodump/mongorestore), so per-document transformation is applied inline while streaming; the real mongodb-crate driver is an optional feature, an in-memory fake backs the tests"
-  - "Storage backends implement a common `Storage` trait, selected at runtime from config (storage.type); the directory backend is always compiled, cloud backends are behind cargo features"
-  - "Configuration is a single YAML file (serde_yaml, deny_unknown_fields) with ${VAR} environment interpolation and per-command clap flag/env overrides"
+  - "MongoDB is accessed through the MongoSource/MongoSink traits (never a wrapped mongodump/mongorestore), so per-document transformation is applied inline while streaming; both traits are deliberately synchronous so the in-memory test fake needs no async runtime, and the real driver blocks on its own Tokio runtime internally"
+  - "Storage backends implement a common `Storage` trait (`Send + Sync`), selected at runtime from `storage.type`; a backend whose cargo feature is not compiled in fails fast with an actionable rebuild message rather than silently no-opping"
+  - "Everything that can be pure is pure: config parsing, the condition evaluator, the transformer registry, retention-policy selection, the schema diff, and every cloud backend's config/key layout are unit-tested with no external service; only the network I/O sits behind a feature flag"
+  - "Configuration is a single YAML file (serde_yaml with deny_unknown_fields) with ${VAR} environment interpolation; per-command clap flags (and a few env vars) override config values, a non-empty CLI list replacing the config list entirely"
+  - "Dump blobs are streamed, never materialized: a collection's data blob is a plain concatenation of BSON documents (mongodump-style framing) so neither dump nor restore ever holds a whole collection in memory"
 actors:
   - id: operator
     name: Operator
-    description: "The person or automated system (e.g. CI/CD pipeline) running the Leafmask CLI with MongoDB and storage-backend credentials. Leafmask has no internal user/auth system of its own — access control is delegated to the database and storage credentials supplied to the CLI."
+    description: "The person or automated system (e.g. a CI/CD pipeline) running the Leafmask CLI with MongoDB and storage-backend credentials. Leafmask has no user/auth system of its own — access control is entirely delegated to the database and storage credentials supplied to the CLI."
 domains:
   - id: dump
     name: Dump
-    description: "Producing logical backups of MongoDB collections, optionally transformed and subset."
+    description: "Producing logical backups of MongoDB collections, optionally transformed and filtered, and the on-storage format they are written in."
   - id: transform
     name: Transformation engine
     description: "Deterministic anonymization/masking/synthetic-data-generation applied to dumped documents."
   - id: subset
     name: Subsetting
-    description: "Filtering a database dump down to a referentially-intact subset of documents."
+    description: "Narrowing a dump down to a subset of documents, and declaring the inter-collection references a referentially-intact subset must follow."
   - id: restore
     name: Restore
-    description: "Restoring a stored dump into a target MongoDB database."
+    description: "Restoring a stored dump into a target MongoDB deployment."
   - id: dumpmgmt
     name: Dump management
     description: "Listing, inspecting, and deleting/pruning dumps held in storage."
   - id: validate
     name: Validation
-    description: "Previewing and validating transformation configuration and schema drift before running a real dump."
+    description: "Previewing transformations against live data, and the warning/schema-drift machinery around it."
   - id: catalog
     name: Transformer catalog
     description: "Discovering available built-in and custom transformers and their parameters."
@@ -45,4 +48,10 @@ domains:
     description: "Pluggable storage abstraction for where dumps are read from and written to."
   - id: config
     name: Configuration
-    description: "Loading and interpolating the CLI's YAML configuration file."
+    description: "Locating, interpolating, and parsing the CLI's YAML configuration file."
+  - id: mongo
+    name: MongoDB access
+    description: "The abstraction every command reads from and writes to MongoDB through, and its real driver adapter."
+  - id: bench
+    name: Benchmarking
+    description: "Measuring dump/restore throughput against a live deployment with synthetic data."

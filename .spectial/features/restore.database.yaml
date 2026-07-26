@@ -1,26 +1,51 @@
 id: restore.database
-name: Restore a dump to a target database
-description: "The operator can restore a previously stored dump (by ID, or the latest one) into a target MongoDB deployment, with filtering, ordering, and parallelism options equivalent to mongorestore."
+name: Restore a dump into a target database
+description: "The operator can restore a stored dump — by id or `latest` — into a target MongoDB deployment, with collection and index filters, batched bulk writes, optional dependency ordering, optional pre-cleaning, and optional concurrency."
 level: user-facing
 access:
   actors: [operator]
   authentication: required
+  notes: "No application-level authorization: whatever the supplied MongoDB URI and storage credentials permit is what the restore can read and write."
 depends_on:
-  - storage.backend-selection
+  - config.loading
+  - mongo.access-layer
+  - dump.storage-format
   - restore.pre-post-scripts
   - restore.error-exclusions
 acceptance:
-  - "Restoring with the special ID 'latest' selects the most recent completed dump found in the configured storage"
-  - "Restoring with an explicit dump ID that does not exist in storage fails with a clear 'dump not found' error instead of restoring nothing silently"
-  - "Database/collection/index include and exclude filters restrict what is restored"
-  - "Restoration can run with multiple parallel jobs and, when requested, in dependency order (indexes and validators created after their collection's documents)"
-  - "Data can be restored either via ordered or unordered bulk writes, in configurable batch sizes"
+  - "Restoring with the id `latest` selects the most recently created dump whose status is done"
+  - "Restoring an explicit dump id that is not in storage fails with a clear not-found error instead of silently restoring nothing"
+  - "Collection and index include/exclude filters restrict what is restored; a filter given on the command line replaces the configured one entirely, an omitted one falls back to the config"
+  - "Documents are inserted in bulk batches of a configurable size (default 1000), ordered or unordered, never one server round-trip per document"
+  - "With ordered writes, a tolerated (excluded) failure resumes the batch immediately after the failed document rather than losing the remainder"
+  - "Each collection's validator and options are applied when the collection is created, and its indexes are created afterwards — or, in dependency order, only once every collection's documents are in"
+  - "The automatic `_id_` index is never re-declared explicitly"
+  - "Cleaning drops each restored collection before recreating it, making a re-run against the same target idempotent instead of failing on duplicate `_id`s; without it, pre-existing data causes duplicate-key failures"
+  - "A non-excluded insert error fails only that collection and the restore moves on to the next one, reporting the failed collections at the end — unless exit-on-error is set, in which case it aborts the whole restore"
+  - "Several collections can be restored concurrently, producing the same insert totals and per-collection contents as a sequential restore"
+  - "The run reports how many documents were inserted, how many were skipped, and how many indexes were created"
 code:
   - "src/cli.rs"
   - "src/restore/database.rs"
+  - "src/restore/mod.rs"
   - "src/mongo.rs"
-  - "src/dump/mod.rs"
 tests:
-  - "tests/mongo_integration.rs"
   - "src/restore/database.rs"
-confidence: medium
+  - "src/cli.rs"
+  - "tests/mongo_integration.rs"
+api:
+  - "leafmask restore <id|latest> [--include-collection] [--exclude-collection] [--include-index] [--exclude-index] [--batch-size N] [--ordered] [--dependency-order] [--exit-on-error] [--clean] [--jobs N]"
+implementation:
+  concurrency: "`--jobs N` (default 1) runs N scoped worker threads pulling collections off a shared atomic cursor, sharing one sink. Without exit-on-error every collection runs regardless of failures (mongorestore semantics); with it, a fatal failure stops new collections from being claimed while already-claimed ones finish."
+  observability: "One line per collection at start (`restoring N documents`), progress every 100,000 inserted documents, and an error line naming the collection when a non-excluded insert failure skips it."
+  performance: "Documents are streamed out of the dump blob and inserted batch by batch, so a restore holds at most one batch in memory regardless of collection size. Metadata-only work (dependency-ordered index creation) re-reads only the small structure blob, never the documents."
+  reliability: "Metadata, clean, ensure-collection, and index-creation failures are always fatal to the whole restore. Insert failures are fatal only with exit-on-error; otherwise they fail their collection, which is reported in the run's failed list."
+notes: |
+  There is no database-level filter and no database remapping: a dump restores
+  into the database names it was taken from.
+  Pre-data scripts run before any collection, post-data scripts after
+  everything, including dependency-ordered index creation.
+  The `restore` command is compiled only with the `mongo` cargo feature;
+  without it, invoking it fails fast with a message telling the operator to
+  rebuild.
+confidence: high

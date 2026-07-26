@@ -1,0 +1,41 @@
+id: mongo.access-layer
+name: MongoDB access abstraction
+description: "All database access goes through a narrow read side and write side rather than a wrapped external dump/restore tool, so documents can be transformed inline while streaming and every consumer can be tested against an in-memory stand-in."
+level: infrastructure
+depends_on: []
+acceptance:
+  - "The read side can enumerate databases and collections, read a collection's structure without reading any of its documents, stream a collection's documents one at a time, and read a bounded sample"
+  - "System databases (admin, config, local) and MongoDB's own catalog namespaces are excluded from enumeration, so they are never treated as user data"
+  - "A filter can be pushed down to the read side so the server does the narrowing, rather than every document being fetched and discarded afterwards"
+  - "A projection can be pushed down alongside the filter, so a caller that needs only a few fields per document pays for those fields rather than the whole document"
+  - "The write side can create a collection applying its validator and options, insert a batch of documents ordered or unordered, create an index, and drop a collection"
+  - "Creating a collection that already exists, or dropping one that does not, succeeds rather than erroring"
+  - "A batch insert reports per-document failures as data, not as a failed call: an ordered batch stops at its first failure and reports how many went in before it, an unordered batch attempts every document and reports all failures; only a whole-batch failure such as a lost connection is an error"
+  - "A duplicate-key failure carries both the error code and the name of the offending index, recovered from the server message"
+  - "An index round-trips through the abstraction with its ordered key specification, direction, uniqueness, and name, defaulting the name from the keys when the server does not supply one"
+  - "Both sides are safe to share across worker threads, so a parallel dump or restore uses one connection handle"
+code:
+  - "src/mongo.rs"
+  - "src/error.rs"
+tests:
+  - "tests/mongo_integration.rs"
+  - "src/mongo.rs"
+implementation:
+  concurrency: "Both traits are deliberately synchronous and thread-safe. The real adapter owns a Tokio runtime and blocks on it internally; the in-memory fake needs no runtime at all, which is what lets the dump, restore, subsetting, and transformation tests run with no external service."
+  reliability: "Server error codes are interpreted rather than passed through opaquely — namespace-exists on create and namespace-not-found on drop are treated as success, so both operations are idempotent."
+notes: |
+  Reads use a plain `find`: a dump is therefore not a point-in-time snapshot.
+  Snapshot read concern would require a replica set and is deliberately not
+  used, so a collection written concurrently can be read inconsistently.
+  Default trait methods let a minimal implementation supply only the four
+  primitives and get filtered reads, structure reads, streaming, projection,
+  and sampling for free by materializing — real adapters override each one to
+  push the work to the server.
+  The real adapter is compiled only with the `mongo` cargo feature; the
+  in-memory stand-in is always compiled. That stand-in enforces unique document
+  ids so duplicate-key handling can be exercised, and honours equality and
+  `$in`/`$nin` filters so callers relying on server-side narrowing are actually
+  exercised by tests rather than quietly getting every document back; a filter
+  shape it does not understand matches nothing rather than everything, so an
+  unsupported filter surfaces as an empty result instead of passing by accident.
+confidence: high

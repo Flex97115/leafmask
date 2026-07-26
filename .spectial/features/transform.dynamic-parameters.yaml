@@ -1,16 +1,27 @@
 id: transform.dynamic-parameters
 name: Dynamic (field-referencing) transformer parameters
-description: "The operator can configure a transformer parameter to be derived from another field's value on the same document at transform time, instead of a fixed value, so generated data stays logically consistent (e.g. created_at always before updated_at)."
+description: "The operator can bind a transformer parameter to another field of the same document instead of a fixed value, so generated data stays internally consistent — a generated end date bounded by the document's own start date, for instance."
 level: internal
 depends_on:
   - transform.parameter-framework
 acceptance:
-  - "A dynamic_params entry referencing another field resolves to that field's current document value when the transformer runs"
-  - "Dynamic parameters are cast to the type the transformer expects, the same way static parameters are"
-  - "Configuring a dynamic parameter that references a nonexistent field is reported as a validation error, not a runtime panic"
+  - "A parameter bound to a field resolves to that field's value on the document currently being transformed, layered over the statically configured values"
+  - "A resolved value is cast to the parameter's declared type exactly as a static value would be, including converting a numeric string to a number"
+  - "Binding a parameter the target transformer does not declare is rejected at configuration time with an error naming the parameter"
+  - "A binding that references a field the collection does not have is reported as a validation error naming the parameter and the field"
+  - "A referenced field that is absent from a document at transform time is an error identifying the parameter and field, never a panic"
+  - "Referenced fields may be nested, addressed by dotted path"
 code:
   - "src/transform/dynamic.rs"
   - "src/toolkit.rs"
 tests:
   - "src/transform/dynamic.rs"
-confidence: medium
+implementation:
+  performance: "A rule with dynamic parameters is rebuilt per document (the parameter values change per document), whereas a fully static rule is compiled once and reused — so dynamic parameters trade throughput for per-document consistency."
+notes: |
+  Config shape: `dynamic_params: {<parameter name>: {field: <dotted path>}}`
+  on a transformer rule; `column` is accepted as an alias for `field`.
+  The known-field validation is a library entry point that the CLI's dump path
+  does not currently call — in a real dump an unknown field surfaces at
+  transform time as the per-document "absent from the document" error instead.
+confidence: high

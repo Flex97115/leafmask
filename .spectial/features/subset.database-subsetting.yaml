@@ -1,20 +1,48 @@
 id: subset.database-subsetting
-name: Referentially-intact database subsetting
-description: "The operator can dump only a filtered subset of documents from selected collections (via subset_conds) while the product automatically follows declared reference relationships (since MongoDB has no enforced foreign keys, every relationship is declared explicitly), including cyclic and polymorphic references, so the resulting subset stays referentially consistent."
+name: Referentially-intact subsetting
+description: "Given filter conditions on some collections and a declared reference graph, a dump takes only the matching documents plus every document transitively needed to satisfy their references, so the result stays referentially consistent."
 level: user-facing
 access:
   actors: [operator]
   authentication: required
+  notes: "Configured in the YAML file and applied by the dump command; no separate CLI surface. Read-only against MongoDB."
 depends_on:
   - subset.virtual-references
+  - subset.condition-filtering
 acceptance:
-  - "A collection with a subset_conds filter dumps only the documents matching that condition"
-  - "Documents in related collections required to satisfy the declared reference relationships for the filtered documents are included even without their own explicit filter"
-  - "A cyclic chain of declared references between collections does not cause an infinite loop or a failed dump"
-  - "A polymorphic reference (declared via a reference with polymorphic expressions) is resolved to the correct target collection when subsetting"
+  - "Collections carrying a condition contribute only their matching documents, which seed the traversal"
+  - "Documents in other collections required to satisfy a declared reference of an included document are pulled in even though those collections have no condition of their own"
+  - "Documents unrelated to any included document are not pulled in, even from a collection that some reference points at"
+  - "A collection the reference graph mentions but from which nothing was admitted is dumped empty, not dumped whole — a referenced collection must never silently widen the subset"
+  - "A collection the subset does not govern at all — no condition, absent from the reference graph — is dumped in full, so lookup and reference data survives subsetting"
+  - "A cyclic chain of references terminates instead of looping, and each document is included exactly once"
+  - "A polymorphic reference resolves per document to the collection its discriminator selects, pulling from that collection and no other"
+  - "A reference whose polymorphic discriminator matches no declared case, or whose referencing field is absent from the document, is skipped rather than failing the traversal"
+  - "A read that fails during the traversal aborts it: an incomplete closure is a referentially broken subset, and must never be returned as if it were a valid smaller one"
+  - "Because reference declarations do not name a database, a run whose filters select more than one database is refused with an error telling the operator to narrow it, rather than mixing identities of same-named collections"
 code:
   - "src/subset/database_subsetting.rs"
+  - "src/subset/mongo_source.rs"
+  - "src/subset/mod.rs"
+  - "src/cli.rs"
 tests:
   - "src/subset/database_subsetting.rs"
-notes: "Documented as a key product feature (README: 'Database Subsetting')."
-confidence: medium
+  - "src/subset/mongo_source.rs"
+  - "src/cli.rs"
+  - "tests/mongo_integration.rs"
+implementation:
+  performance: "Runs in two phases so the dump keeps streaming. Phase 1 walks the closure but retains only each included document's `_id`; phase 2 hands the dump `{_id: {$in: [...]}}` filters, which are pushed to the server, so no collection is ever materialized. Phase 1 itself pushes both the seed condition and every reference lookup down as MongoDB queries, and projects only `_id`, the reference-bearing fields, and any polymorphic discriminator — so its cost is proportional to the reference graph, not to the documents' real size."
+  reliability: "Traversal is an explicit work stack with a visited set keyed by collection plus document id, so cycles are bounded in one pass with no recursion. Read errors propagate instead of truncating the closure."
+notes: |
+  Turned on by declaring both `dump.subset_conds` and `virtual_references`.
+  With conditions but no reference graph the dump falls back to filtering each
+  collection independently (subset.condition-filtering), which is faster but
+  carries no referential guarantee.
+  Known cost of the two-phase design: the database is read twice — once to
+  compute the closure (projected, filtered), once to dump. The `_id` list is
+  held in memory between the phases, so a subset covering a very large share of
+  a very large database still has a memory floor, roughly one identity per
+  included document.
+  A document with no `_id` cannot be addressed by an `_id` filter, so it is
+  traversed but left out of the id closure.
+confidence: high

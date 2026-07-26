@@ -1,14 +1,25 @@
 id: restore.pre-post-scripts
 name: Pre/post-restore hook scripts
-description: "The operator can declare MongoDB shell (mongosh) scripts, script files, or external commands to run at specific stages of the restore process, so they can prepare or clean up the target database around the restoration."
+description: "The operator can declare scripts to run at named stages of a restore — a raw mongosh command, a mongosh script file, or an external command — so the target database can be prepared or cleaned up around the restoration."
 level: internal
 depends_on: []
 acceptance:
-  - "A configured script for a given restore stage runs at that stage before proceeding to the next one"
-  - "A script can be a raw mongosh command, a path to a script file, or an external command with arguments"
-  - "A failing script stops the restore and surfaces the error to the operator"
+  - "Every script configured for a stage runs at that stage, in declaration order, before the restore proceeds past it"
+  - "A stage with no configured scripts is a no-op, not an error"
+  - "A script is exactly one of: a raw mongosh command, a path to a mongosh script file, or an external command with its arguments — a script declaring none or several of these is rejected as a configuration error naming the script"
+  - "A failing script stops the stage immediately, surfaces the error to the operator, and prevents the scripts declared after it from running"
+  - "mongosh scripts are run against the same MongoDB URI the restore itself uses, and a non-zero exit status is a failure"
 code:
   - "src/restore/scripts.rs"
 tests:
   - "src/restore/scripts.rs"
-confidence: medium
+notes: |
+  Configured under `restore.scripts` as a mapping of stage name to a list of
+  script specs (`{name?, query | query_file | command}`). The restore driver
+  only ever invokes two stages: `pre-data` (before any collection) and
+  `post-data` (after everything, including dependency-ordered index creation).
+  Any other stage key is parsed and stored but never triggered.
+  Execution goes through a runner abstraction, so staging and failure semantics
+  are unit-tested without spawning real processes; the real runner shells out to
+  `mongosh` (or the external binary) and treats a non-zero exit as an error.
+confidence: high

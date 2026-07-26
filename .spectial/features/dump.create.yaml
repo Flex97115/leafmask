@@ -1,28 +1,50 @@
 id: dump.create
 name: Create a logical database dump
-description: "The operator can produce a logical backup of a MongoDB database, including collection documents, indexes, and collection options, filtered by database/collection and optionally compressed and parallelized."
+description: "The operator can produce a logical backup of a MongoDB deployment — documents, indexes, and collection options — filtered by database and collection, transformed inline, optionally gzip-compressed, and optionally dumped several collections at a time."
 level: user-facing
 access:
   actors: [operator]
   authentication: required
+  notes: "No application-level authorization: whatever the supplied MongoDB URI and storage credentials permit is what the dump can read and write."
 depends_on:
   - config.loading
-  - storage.backend-selection
+  - mongo.access-layer
+  - dump.storage-format
   - transform.apply-transformations
+  - subset.condition-filtering
   - subset.database-subsetting
 acceptance:
-  - "Running the dump command against a reachable MongoDB deployment produces a dump identified by a timestamp-based ID in the configured storage"
-  - "Database and collection include/exclude filters restrict what is dumped"
-  - "Index definitions and collection options (e.g. validators, capped-collection settings) are captured as part of the dump unless explicitly excluded"
-  - "Binary/large field values are captured as BSON binary data inline with the owning document, without requiring a separate GridFS pass"
-  - "Data can be compressed (gzip or pgzip) and dumped using multiple parallel jobs"
-  - "If common.tmp_dir is not configured, the dump fails fast with an explicit error instead of dumping"
-  - "Dumping a collection produces a point-in-time-consistent view of its documents even under concurrent writes, using a session snapshot"
+  - "Running the dump command against a reachable deployment produces a dump in the configured storage, identified by a timestamp-derived id, and reports that id and the dump's total size"
+  - "Database and collection include/exclude filters restrict what is dumped; a filter given on the command line replaces the configured one entirely, an omitted one falls back to the config"
+  - "Index definitions and collection options (validators, capped settings, …) are captured per collection unless index capture is explicitly disabled"
+  - "Binary and large field values are captured as BSON binary inline with their owning document, with no separate GridFS pass"
+  - "Collection data can be gzip-compressed on the way out"
+  - "Several collections can be dumped concurrently, and a concurrent dump produces metadata identical to a sequential one — same document counts, same restore order (source enumeration order, not completion order), same total size"
+  - "A failure while dumping one collection fails the whole run with that error, and no spool file or in-flight upload is left behind — including for collections that succeeded alongside the failure"
+  - "If `common.tmp_dir` is not configured, the dump fails fast with an explicit error before touching the database"
+  - "When transformations are configured but no salt is, the operator is warned that anonymization is running with the public default salt and is therefore reversible; with no transformations configured, no such warning is emitted"
+  - "MongoDB's own catalog namespaces (`system.*`) and the admin/config/local databases are never dumped as user data"
 code:
   - "src/cli.rs"
   - "src/dump/create.rs"
   - "src/mongo.rs"
 tests:
-  - "tests/mongo_integration.rs"
   - "src/dump/create.rs"
-confidence: medium
+  - "src/cli.rs"
+  - "tests/mongo_integration.rs"
+api:
+  - "leafmask dump [--gzip] [--include-db] [--exclude-db] [--include-collection] [--exclude-collection] [--jobs N] [--no-indexes]"
+implementation:
+  concurrency: "`--jobs N` (default 1) runs N scoped worker threads pulling collections off a shared atomic cursor. The source and the storage handle are shared across threads. On the first failure no new collection is claimed, but collections already claimed run to completion, so a mid-dump error never cuts off a spool file or an upload in progress."
+  observability: "Progress is logged every 100,000 documents per collection, plus one line per database and one summary line per collection (`N documents`, or `N of M documents` when a filter dropped some). A failure inside a parallel worker is logged immediately, because it may be some time before it surfaces as the run's final error."
+  performance: "Documents are streamed from the source cursor, transformed, and written one at a time — a collection is never materialized. Per-collection query filters are pushed down to MongoDB so a narrow filter does not require fetching the whole collection."
+  reliability: "A dump only writes its metadata once every collection has succeeded; on failure the run returns the error and no metadata document is written, so a partial dump is never resolvable as `latest`."
+notes: |
+  Reads use a plain `find`, so a dump is NOT a point-in-time snapshot: a
+  collection written concurrently can be dumped inconsistently. Snapshot read
+  concern would require a replica set and is deliberately not used.
+  Compression is gzip only (flate2, default level); there is no parallel-gzip
+  variant.
+  The `dump` command is compiled only with the `mongo` cargo feature; without
+  it, invoking it fails fast with a message telling the operator to rebuild.
+confidence: high

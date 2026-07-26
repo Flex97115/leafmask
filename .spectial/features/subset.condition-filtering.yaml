@@ -1,0 +1,34 @@
+id: subset.condition-filtering
+name: Dump only the documents matching a per-collection condition
+description: "The operator can attach a filter expression to a collection so that a dump takes only the documents matching it, with the condition evaluated by the database rather than by fetching everything and discarding most of it."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+  notes: "Configured in the YAML file, applied by the dump command; no separate CLI surface."
+depends_on:
+  - transform.transformation-condition
+  - mongo.access-layer
+acceptance:
+  - "A collection with a configured condition dumps only the documents matching it; collections without one dump entirely"
+  - "The condition is translated into a native database filter and evaluated server-side, so a narrow condition does not require reading the whole collection"
+  - "An invalid condition expression fails the dump at configuration-parse time, before any data is read"
+  - "The full condition grammar is available, including comparisons, list membership, boolean composition, dotted paths, and RFC3339 date literals"
+  - "The run reports how many documents were written versus how many the source produced, whenever a filter dropped some"
+code:
+  - "src/cli.rs"
+  - "src/dump/create.rs"
+  - "src/mongo.rs"
+tests:
+  - "src/cli.rs"
+  - "tests/mongo_integration.rs"
+implementation:
+  performance: "Filters are handed to the driver's find call rather than applied in the dump loop — the integration test asserts the narrowing actually happens at the database, not after the fetch."
+notes: |
+  Configured as `dump.subset_conds: {<collection>: "<expression>"}`.
+  On its own this filters each collection independently and does NOT follow
+  references between collections, so the result is not guaranteed to be
+  referentially intact. Declaring `virtual_references` alongside it switches the
+  dump to referential subsetting, which uses the same conditions as the seed of
+  a reference closure — see subset.database-subsetting.
+confidence: high

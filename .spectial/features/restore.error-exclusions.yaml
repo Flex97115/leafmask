@@ -1,14 +1,22 @@
 id: restore.error-exclusions
 name: Insert error exclusions
-description: "The operator can configure specific unique-index names or MongoDB error codes (globally or per collection) that should be tolerated and skipped during data restoration instead of aborting the whole restore."
+description: "The operator can declare MongoDB error codes or unique-index names — globally or per collection — whose insert failures should be tolerated and skipped during a restore instead of failing the collection."
 level: internal
 depends_on: []
 acceptance:
-  - "An insert error matching a configured excluded index name or error code (e.g. E11000 duplicate key) for its collection is logged and skipped, and restoration continues with the next document"
-  - "An insert error not matching any exclusion still aborts restoration (or the collection, depending on --exit-on-error) as before"
-  - "Global exclusions apply across all collections in addition to any collection-specific ones"
+  - "An insert failure whose error code or offending index name matches an exclusion configured for its collection is counted as skipped and the restore continues with the next document"
+  - "Exclusions declared globally apply to every collection, in addition to any collection-specific ones"
+  - "An insert failure matching no exclusion is not tolerated: it fails its collection (or, with exit-on-error, the whole restore)"
+  - "A collection-specific exclusion does not apply to a different collection, and an empty exclusion configuration tolerates nothing"
 code:
   - "src/restore/error_exclusions.rs"
 tests:
   - "src/restore/error_exclusions.rs"
-confidence: medium
+notes: |
+  Configured under `restore.insert_error_exclusions` with three keys:
+  `global_error_codes` (list of int), `global_index_names` (list of string),
+  and `collections` (list of `{collection, error_codes, index_names}`).
+  The matched failure is distilled to `{code, index_name}`; the index name is
+  recovered from an E11000 duplicate-key message by taking the token after
+  `index:`. The canonical use is tolerating code 11000.
+confidence: high

@@ -1,6 +1,6 @@
 id: storage.backend-selection
 name: Pluggable storage backend selection
-description: "The product reads and writes dumps through a single storage abstraction, letting the operator pick which physical backend (local directory, S3-compatible, Azure Blob, or SSH/SFTP) is used for a given run purely via config, without any other command needing to know which one is active."
+description: "The product reads and writes dumps through one storage abstraction, letting the operator pick the physical backend (local directory, S3-compatible, Azure Blob, or SFTP) purely via config, without any command needing to know which one is active."
 level: infrastructure
 depends_on:
   - storage.directory-backend
@@ -8,11 +8,25 @@ depends_on:
   - storage.azure-backend
   - storage.ssh-backend
 acceptance:
-  - "Setting storage.type to directory, s3, azure, or ssh in the config selects the matching backend implementation at startup"
-  - "Every command that reads or writes dumps (dump, restore, list-dumps, show-dump, delete, validate --schema) works identically regardless of which backend is configured"
-  - "An unsupported or misspelled storage.type value fails fast with a clear error instead of silently defaulting"
+  - "Setting storage.type to directory, s3, azure, or ssh selects the matching backend at startup and hands every command the same abstract handle"
+  - "Every command that reads or writes dumps (dump, restore, list-dumps, show-dump, delete) works identically regardless of which backend is configured"
+  - "A missing storage.type is an error listing the valid values, not a silent default to the local directory"
+  - "An unsupported or misspelled storage.type fails fast with an error naming the offending value and the valid ones"
+  - "Selecting a backend whose build feature was not compiled in fails with an actionable message telling the operator which feature to rebuild with, rather than a generic failure"
 code:
+  - "src/storage/mod.rs"
   - "src/storage/selection.rs"
 tests:
   - "src/storage/selection.rs"
+  - "src/storage/mod.rs"
+notes: |
+  The `Storage` trait surface every backend implements: list_dumps, get, put,
+  exists, put_file, get_reader, delete, list, size, multipart_writer. The last
+  three named here have defaults (put_file buffers through put; get_reader
+  wraps get in a cursor; multipart_writer returns None) so a minimal backend
+  only has to implement the other six — but a backend that can stream is
+  expected to override them so multi-gigabyte blobs stay bounded in memory.
+  Paths are always `/`-separated and relative to the backend root, and the
+  first path segment is always the dump id — that convention is what makes
+  `list_dumps` and whole-dump `delete` work uniformly across backends.
 confidence: high

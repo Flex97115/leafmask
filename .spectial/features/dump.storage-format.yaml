@@ -1,0 +1,29 @@
+id: dump.storage-format
+name: On-storage dump format
+description: "The product defines the format a dump takes in storage — a metadata/table-of-contents document plus, per collection, a streamable document blob and a separate structure blob — so dumps can be written, listed, inspected, and restored without any command ever holding a whole collection in memory."
+level: infrastructure
+depends_on:
+  - storage.backend-selection
+acceptance:
+  - "A dump is identified by a timestamp-derived id and carries a metadata document recording its status (done / failed / in-progress / unknown), creation timestamp, total size, and a per-database, per-collection table of contents with document counts, index names, and a restore order"
+  - "A collection's documents are stored as a plain concatenation of BSON documents, never wrapped in one enclosing document, so a collection is not capped by the 2 GiB single-document limit and can be read incrementally"
+  - "A collection's structure (indexes, validator, collection options, document count) is stored in a separate small blob beside the data, so reading structure never requires reading documents"
+  - "Documents can be read back one at a time or in fixed-size batches, transparently handling both the plain and gzip-compressed variants of the data blob"
+  - "A truncated or corrupt data blob is reported as a clear corruption error instead of being partially accepted, and a declared document length outside 5 bytes to 64 MiB is rejected rather than attempted as an allocation"
+  - "The reference `latest` resolves to the most recently created dump whose status is done; an unknown dump id is a clear not-found error"
+  - "A dump whose metadata cannot be read still appears in listings as an unknown-status entry rather than failing the whole listing"
+  - "A writer abandoned without being finished cleans up after itself — the local spool file is removed, or the in-flight multipart upload is aborted — instead of leaving either behind"
+code:
+  - "src/dump/mod.rs"
+tests:
+  - "src/dump/mod.rs"
+implementation:
+  performance: "Both the writer and the reader are streaming: the writer appends one document at a time into either a backgrounded multipart upload (when the backend offers one) or a local spool file uploaded whole at the end; the reader yields documents one at a time. Memory is bounded per document, never per collection."
+  reliability: "The writer's cleanup-on-drop path is careful about gzip specifically: the encoder's own drop would otherwise write a trailer into an already-removed spool file or an already-aborted upload, so the trailer is landed first and only then is the underlying sink cleaned up."
+notes: |
+  Layout inside a dump: `<id>/metadata.json`,
+  `<id>/data/<db>/<collection>.bson` (or `.bson.gz`) for documents, and
+  `<id>/data/<db>/<collection>.meta.bson` for structure.
+  Spool file names embed the process id and a per-process counter so concurrent
+  dumps (and parallel tests) never share one.
+confidence: high

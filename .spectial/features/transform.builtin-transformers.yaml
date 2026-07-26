@@ -1,19 +1,50 @@
 id: transform.builtin-transformers
 name: Built-in transformer library
-description: "The product ships a library of built-in transformers covering hashing, deterministic random generation (names, emails, addresses, dates, numbers, IPs, MAC addresses, ObjectIds/UUIDs, booleans, companies), noise addition, masking, regexp replace, dictionary lookup, value replacement, null-setting, embedded-document field transformation, and Go-template-based transformation, operating natively on BSON types (ObjectId, Decimal128, ISODate, binary)."
+description: "The product ships a library of built-in transformers — hashing, deterministic generation, noise, masking, regexp replacement, fixed replacement, nulling, and templating — each registered by name with typed parameters and operating natively on BSON values."
 level: internal
 depends_on:
   - transform.parameter-framework
   - transform.hash-engine
 acceptance:
-  - "Each built-in transformer is registered with a name, description, and typed parameter list discoverable via the transformer catalog"
-  - "Hash- and deterministic-random-based transformers produce the same output for the same input and the same seed/salt, across separate runs"
-  - "Noise transformers (date/float/int/numeric) perturb a value within a configurable range while keeping its BSON type"
-  - "Transformers that generate structured data (person, address, company) can populate multiple related output fields consistently"
-  - "An ObjectId-valued field can be deterministically transformed while remaining a valid ObjectId"
+  - "Every built-in is registered under a unique name with a description and a typed parameter list, all discoverable through the transformer catalog"
+  - "Hash- and generation-based transformers produce the same output for the same input and salt across separate instantiations and runs"
+  - "Noise transformers perturb a value within a configurable bound while preserving its BSON type — an integer stays an integer, a date stays a date"
+  - "A transformer producing structured output populates several related fields consistently with each other (a generated person's email is derived from that same person's generated names)"
+  - "An ObjectId-valued field can be transformed into a different but still valid ObjectId"
+  - "A transformer given a value of a type it cannot handle fails with a clear error naming what it needed, rather than silently producing garbage"
+  - "A transformer may read sibling fields of the document it is transforming, not only the target field's own value"
 code:
   - "src/transform/mod.rs"
   - "src/transform/builtin.rs"
 tests:
   - "src/transform/builtin.rs"
-confidence: medium
+notes: |
+  Complete catalog as implemented (16 transformers), with parameters —
+  this is the full inventory, not a sample:
+
+    hash(length: int = 16)              hex hash of the input, truncated
+    random_int(min: int!, max: int!)    deterministic integer in [min, max]
+    random_float(min: float!, max: float!)  deterministic double in [min, max]
+    noise_int(ratio: float = 0.1)       ±ratio of magnitude, stays Int64
+    noise_float(ratio: float = 0.1)     ±ratio of magnitude, stays Double
+    noise_date(max_days: int = 30)      ±max_days shift, stays DateTime
+    masking(char: string = "*")         every character replaced, length kept
+    regexp_replace(regexp: string!, replace: string!)  replace-all on a string
+    replace(value: any!)                fixed configured value
+    set_null()                          null
+    random_email(domain: string = "example.com")  user<hash>@domain
+    random_person()                     embedded doc {first_name, last_name, email}
+    random_company()                    company name from a fixed list
+    random_object_id()                  deterministic valid ObjectId
+    random_bytes(length: int = 16)      deterministic BSON binary
+    template(template: string!)         renders "{{ field }}" from the document
+
+  `!` marks a required parameter.
+
+  Deliberately NOT present, despite being in the PostgreSQL-tool lineage this
+  product base came from: address/IP/MAC/UUID/boolean generators, dictionary
+  lookup, and a full Go-template engine. `template` supports only
+  `{{ field }}` / `{{ .field }}` placeholder substitution — no conditionals,
+  loops, or functions. Fixed name/company pools are 10 first names, 10 last
+  names, 6 companies.
+confidence: high

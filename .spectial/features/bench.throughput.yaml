@@ -1,0 +1,41 @@
+id: bench.throughput
+name: Measure dump and restore throughput
+description: "The operator can measure how fast dumps and restores actually run on their deployment, by seeding synthetic customer-shaped documents at chosen volumes, timing a real dump and restore of them, and printing a results table."
+level: user-facing
+access:
+  actors: [operator]
+  authentication: required
+  notes: "Needs a MongoDB URI with rights to create and drop the dedicated bench database. Destructive within that one database only, and guarded (see acceptance)."
+depends_on:
+  - dump.create
+  - restore.database
+acceptance:
+  - "For each requested document count, the bench seeds that many synthetic documents, dumps them with gzip to a temporary local directory, restores them into an empty database, and times both phases"
+  - "The synthetic document is deterministic — the same index always yields the same document — and customer-shaped: about ten fields covering identity, contact, an embedded address, status, a date, and numeric counters"
+  - "Results are printed as a table of document count, dump time, restore time, dump size, and documents per second, either aligned text or markdown"
+  - "Larger volumes can be linearly extrapolated from the largest measured run and are explicitly marked as estimates in the output"
+  - "The bench refuses to touch its dedicated database if that database exists, is non-empty, and does not carry the marker collection a previous bench run would have left — so it can never wipe a database it did not create"
+  - "Every database the bench creates carries that marker, so an interrupted run is recognized and auto-cleaned by the next one instead of blocking it"
+  - "A restore that does not insert exactly the seeded number of documents fails the bench rather than reporting a misleading figure"
+  - "Unless explicitly kept, the bench database and its temporary work directory are removed after the run"
+  - "The bench needs only a MongoDB URI: a config file is optional, but a config file that exists and fails to parse is a real error rather than being treated as absent"
+  - "A requested size that is not a positive integer document count is rejected before any database work"
+code:
+  - "src/bench.rs"
+  - "src/cli.rs"
+tests:
+  - "src/bench.rs"
+api:
+  - "leafmask bench [--sizes 100000,1000000] [--estimate 10000000] [--markdown] [--keep]"
+implementation:
+  observability: "Logs one line per size before seeding, naming the document count and target namespace, since seeding millions of documents is otherwise a long silence."
+  performance: "Seeding inserts in batches of 1000; the restore uses the same batch size, so the measured figures reflect the batched write path rather than per-document round-trips. Storage is a local directory, so the numbers exclude any network cost."
+  reliability: "The bench database is guarded (and dropped) once per size rather than once per run, so consecutive sizes cannot accumulate documents from the previous size when the run is asked to keep its data."
+notes: |
+  Fixed names: database `leafmask_bench`, data collection `clients`, marker
+  collection `leafmask_bench_marker`. Defaults: sizes 100000,1000000 with
+  10000000 extrapolated.
+  The `bench` command is compiled only with the `mongo` cargo feature; without
+  it, invoking it fails fast with a message telling the operator to rebuild.
+  The results published in the project README come from this command.
+confidence: high

@@ -1,19 +1,24 @@
 id: catalog.list-transformers
 name: List available transformers
-description: "The operator can list every transformer available to the current config — built-in and custom — with a short description of each, to discover what is available before writing transformation rules."
+description: "The operator can list every transformer available to the current configuration — built-in and custom — each with a one-line description, to discover what exists before writing transformation rules."
 level: user-facing
 access:
   actors: [operator]
   authentication: none
+  notes: "Reads only the local config file; needs neither a database nor a storage backend, and works with no config at all."
 depends_on:
   - transform.builtin-transformers
   - transform.custom-transformers
 acceptance:
-  - "Running list-transformers prints every built-in transformer's name and short description"
-  - "Custom transformers declared in the loaded config file also appear in the listing"
+  - "Listing prints one `name — description` line per transformer, sorted by name"
+  - "Every built-in transformer appears in the listing"
+  - "Custom transformers declared in the loaded config appear alongside the built-ins"
+  - "The command works without a config file, listing the built-ins only"
 code:
   - "src/catalog.rs"
   - "src/cli.rs"
 tests:
   - "src/catalog.rs"
+api:
+  - "leafmask list-transformers"
 confidence: high

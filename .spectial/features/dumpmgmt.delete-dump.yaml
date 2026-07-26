@@ -1,23 +1,34 @@
 id: dumpmgmt.delete-dump
 name: Delete or prune dumps
-description: "The operator can delete a specific dump by ID from storage, or apply a retention policy to prune multiple dumps at once — keeping only the N most recent, keeping dumps for a given duration, deleting dumps before a given date, and/or pruning failed or unknown-status dumps — with an optional dry-run to preview what would be deleted."
+description: "The operator can delete one dump by id, or prune several at once by retention policy — keeping only the N most recent, deleting everything before a date, and/or removing failed and unknown-status dumps — with a dry run to preview what would go."
 level: user-facing
 access:
   actors: [operator]
   authentication: required
+  notes: "Requires whatever credentials the configured storage backend needs; no MongoDB connection is involved. Destructive: there is no confirmation prompt, the dry run is the only safeguard."
 depends_on:
-  - storage.backend-selection
+  - dump.storage-format
 acceptance:
-  - "Deleting a dump by explicit ID removes it, and only it, from storage"
-  - "--retain-recent N keeps only the N most recent completed dumps and deletes the rest"
-  - "--retain-for and --before-date delete dumps outside the retained time window"
-  - "--prune-failed (optionally combined with --prune-unsafe) removes dumps that did not complete successfully"
-  - "--dry-run reports exactly what would be deleted without deleting anything"
+  - "Deleting by explicit id removes that dump and only that dump; deleting an id that is not in storage is a clear error, not a silent no-op"
+  - "Keeping only the N most recent completed dumps protects those N from every other rule and selects every other completed dump for deletion"
+  - "Keeping the 0 most recent selects every completed dump — the literal reading, not a no-op"
+  - "Deleting before a given date selects every dump created strictly before it; an invalid date is rejected before anything is deleted"
+  - "Pruning failed dumps selects dumps whose status is failed; additionally pruning unsafe ones also selects unknown and in-progress dumps"
+  - "A dry run reports exactly the ids that would be deleted and leaves storage untouched"
+  - "Selection is deterministic: the same set of dumps and the same policy always yield the same sorted list of ids"
 code:
-  - "src/dump/mod.rs"
   - "src/dump/management.rs"
   - "src/cli.rs"
 tests:
   - "src/dump/management.rs"
-  - "src/dump/mod.rs"
+api:
+  - "leafmask delete [--id ID] [--retain-recent N] [--before-date RFC3339] [--prune-failed] [--prune-unsafe] [--dry-run]"
+notes: |
+  The retention policy also carries a "retain for a duration" rule, used and
+  tested at the library level, but the CLI exposes no flag for it — only
+  --retain-recent, --before-date, --prune-failed and --prune-unsafe reach it.
+  A dump whose recorded creation timestamp is unparseable is treated as the
+  Unix epoch, so it falls outside every retention window and is a prune
+  candidate.
+  Available in the default build — no MongoDB feature required.
 confidence: high

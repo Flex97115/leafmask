@@ -1,14 +1,32 @@
 id: validate.warnings
-name: Transformer configuration warnings
-description: "The product surfaces structured validation warnings about the transformer configuration (e.g. risky or ambiguous settings), which the operator can review and explicitly mark as resolved in the config so they stop being reported."
+name: Structured, resolvable validation warnings
+description: "Validation issues are surfaced as individually identifiable warnings rather than opaque errors, each with a stable identifier the operator can list in the config to mark it resolved and stop seeing it."
 level: internal
 depends_on: []
 acceptance:
-  - "A configuration issue detected during validation is reported as a distinct, identifiable warning rather than a generic error"
-  - "A warning whose identifier is listed under resolved_warnings in the config is no longer shown on subsequent runs"
-  - "With --warnings, all warnings are printed even if they would otherwise be summarized or suppressed"
+  - "A warning carries a severity, a message, and structured context (collection, field, transformer, …)"
+  - "Each warning has an identifier derived deterministically from its severity, message, and context, so the same issue always produces the same identifier across runs and machines"
+  - "Two warnings with the same message but different context have different identifiers"
+  - "A warning whose identifier is listed as resolved in the config is no longer shown"
+  - "A show-everything mode displays all warnings including the resolved ones"
+  - "Whether any warning remains unresolved is answerable as a single check, which is what strict mode acts on"
 code:
   - "src/validate/warnings.rs"
+  - "src/validate/mod.rs"
 tests:
   - "src/validate/warnings.rs"
-confidence: medium
+notes: |
+  Identifier = first 6 bytes of SHA-256 over severity, message, and the
+  context entries in sorted key order, hex-encoded — 12 hex characters, stable
+  and order-independent. Severities: info, warning, error.
+  Resolved identifiers are read from the top-level `resolved_warnings` list in
+  the config.
+  No code path produces a warning yet, and no CLI flag exposes the
+  show-everything mode: the preview command constructs an empty warning set, so
+  strict mode currently has nothing to fail on. The machinery — identity,
+  suppression, strict check — is complete and tested; what is missing are the
+  detection rules, and adding the flag before any rule exists would ship a
+  switch that can never change the output. This was left out deliberately
+  rather than overlooked; regenerating the feature usefully means deciding
+  which configurations deserve a warning first.
+confidence: high

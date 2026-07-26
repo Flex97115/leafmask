@@ -1,13 +1,35 @@
 id: transform.transformation-inheritance
 name: Transformation propagation to referencing fields
-description: "The operator can have a transformer's rule automatically apply to fields in other collections that hold a declared reference to the transformed field (apply_for_references), instead of repeating the configuration for every referencing collection, keeping referential values consistent. (Postgres-style partition inheritance does not apply — MongoDB has no equivalent table-partitioning concept.)"
+description: "A transformer marked as applying to references is propagated to every field in other collections that declares a reference to the transformed field, so referencing values stay consistent with the transformed ones without repeating the configuration."
 level: internal
-depends_on: []
+depends_on:
+  - subset.virtual-references
 acceptance:
-  - "A transformer with apply_for_references applies the same deterministic transformation to fields that hold a declared reference to the transformed field, keeping referential values consistent"
-  - "A referencing field with its own explicitly configured transformation is not overridden by the inherited one"
+  - "A transformation marked as applying to references produces an additional, identical transformation on every field that declares a reference to the transformed collection and field"
+  - "Because the propagated transformation is the identical transformer with identical parameters and salt, an equal input value yields an equal output on both sides of the reference"
+  - "A referencing field that already has its own explicitly configured transformation keeps it and is never overridden by a propagated one"
+  - "A propagated transformation is marked as such, distinguishable from an explicitly configured one, and does not itself propagate further"
+  - "The same referencing field never receives two propagated transformations, even when several reference edges point at the same transformed field"
+  - "Without the marker, nothing is propagated; and with no declared reference graph at all, nothing is propagated either"
+  - "A propagated transformation reaches the running dump, not merely the configuration: the referencing field is actually rewritten, and rewritten to the same value as the field it references"
 code:
   - "src/transform/inheritance.rs"
+  - "src/transform/apply.rs"
+  - "src/cli.rs"
 tests:
   - "src/transform/inheritance.rs"
-confidence: medium
+  - "src/transform/apply.rs"
+notes: |
+  The expansion runs when the transformation plan is compiled, so a propagated
+  rule is a real rule of the plan and is indistinguishable at transform time
+  from a configured one. Compiling without a reference graph propagates
+  nothing, which is what a config with no `virtual_references` gets.
+  An inherited rule copies the source rule's transformer name and parameters
+  and nothing else — `when` and `dynamic_params` are deliberately dropped,
+  because both read fields of the document being transformed and the
+  referencing document is a different document in a different collection;
+  carrying them over would make the two sides diverge, defeating the
+  consistency this feature exists to provide.
+  Partition inheritance from the PostgreSQL tool this product base came from is
+  deliberately absent: MongoDB has no table-partitioning equivalent.
+confidence: high

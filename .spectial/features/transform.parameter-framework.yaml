@@ -1,14 +1,31 @@
 id: transform.parameter-framework
-name: Transformer parameter definition and validation SDK
-description: "The product provides a typed parameter framework (the toolkit package) that every transformer, built-in or custom, uses to declare, cast, and validate its configuration parameters against the target field's BSON type."
+name: Transformer parameter declaration and validation toolkit
+description: "The product provides one typed parameter framework that every transformer — built-in or custom — uses to declare its parameters, validate configured values against their declared types, and cast between BSON native types and the values transformers operate on."
 level: infrastructure
 depends_on: []
 acceptance:
-  - "A transformer parameter declares an expected type and is rejected at config-validation time if the configured value cannot be cast to it"
-  - "Static parameter values are decoded from the YAML config and made available to the transformer at document-transform time"
-  - "Type casting functions correctly convert between BSON native types (ObjectId, Decimal128, ISODate, binary, etc.) and the generic values transformers operate on"
+  - "A parameter is declared with a name, a logical type, a description, and either a required marker or a default value; the declaration is what the catalog renders"
+  - "A configured value that cannot be cast to its parameter's declared type is a configuration-time error naming the parameter and the expected type, not a runtime failure"
+  - "A required parameter with no configured value and no default is a configuration-time error naming the parameter"
+  - "An optional parameter with no configured value resolves to its declared default"
+  - "Configured values are decoded once at configuration time and handed to the transformer already typed"
+  - "Casting works both from raw config values and from values already read out of a document, so a parameter can be sourced either statically or from a field"
+  - "Numeric values widen and narrow between integer and floating-point forms, and numeric strings are accepted where a number is expected"
+  - "Every BSON type a transformer may operate on can be produced from its textual form and rejected with a clear error when malformed"
 code:
   - "src/toolkit.rs"
 tests:
   - "src/toolkit.rs"
-confidence: medium
+notes: |
+  The complete set of logical parameter types, with the names used in config
+  (`type_override`, custom-transformer parameter declarations):
+  string, int, float, bool, bytes, objectId, decimal128, datetime, binary, any.
+  Decoding rules worth reproducing: objectId from a 24-char hex string;
+  datetime from an RFC3339 string; decimal128 from a decimal string; bytes and
+  binary from a string's raw UTF-8 bytes; `any` passes the value through with
+  YAML mappings and sequences converted recursively to BSON documents/arrays.
+  A separate helper renders any BSON value to the stable byte sequence
+  transformers hash over — type-aware (big-endian numerics, ObjectId bytes,
+  epoch millis for dates, empty for null), so hashing is stable across runs and
+  types.
+confidence: high
