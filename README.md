@@ -187,6 +187,25 @@ implementation was regenerated from. Regeneration assumptions and target-stack
 porting decisions are recorded in
 [`.spectial/regeneration-gaps.md`](.spectial/regeneration-gaps.md).
 
+### 🕸️ Explore the feature graph
+
+Spectial renders the whole product as an interactive dependency graph — every
+feature, what it depends on, and which files implement it. Click a node to read
+its specification.
+
+**▶ [Open the live feature graph](https://flex97115.github.io/leafmask/graph.html)**
+
+Leafmask currently maps to **33 features** across 11 domains (11 infrastructure,
+10 internal, 12 user-facing). `dump.storage-format` and `mongo.access-layer` are
+the widest blast radius — change either and most of the product moves.
+
+The graph is generated, not hand-drawn: `spectial:extract` writes
+`.spectial/graph.html` alongside [`graph.json`](.spectial/graph.json),
+[`graph.mmd`](.spectial/graph.mmd), and a
+[report](.spectial/GRAPH_REPORT.md) of god nodes and leaf features. The Docs
+workflow publishes it to GitHub Pages, because GitHub renders HTML files as
+source rather than as pages.
+
 ## Credits
 
 - **[Spectial](https://github.com/Flex97115/spectial)** — the regeneration

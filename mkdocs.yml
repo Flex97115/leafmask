@@ -82,3 +82,6 @@ nav:
   - Commands: commands.md
   - Benchmarks: benchmarks.md
   - Full config example: config-example.md
+  # Copied into docs/ by the Docs workflow from .spectial/graph.html, so it is
+  # an absolute URL rather than a page mkdocs owns.
+  - Feature graph: https://flex97115.github.io/leafmask/graph.html

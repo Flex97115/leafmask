@@ -4,3 +4,7 @@
 /site
 /_site
 .superpowers/
+graphify-out/
+# Copied from .spectial/ by the Docs workflow; never committed, so the product
+# base stays the single source of truth.
+/docs/graph.html

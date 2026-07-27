@@ -7,6 +7,9 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - ".github/workflows/docs.yml"
+      # The feature graph is published from .spectial/, so re-extracting the
+      # product base has to redeploy the site.
+      - ".spectial/graph.html"
   workflow_dispatch:
 
 permissions:
@@ -27,6 +30,11 @@ jobs:
         with:
           python-version: "3.x"
       - run: pip install -r docs/requirements.txt
+      # Publish the generated feature graph as a static page. GitHub does not
+      # render HTML held in a repository, so serving it from Pages is the only
+      # way a reader can actually open it. Copied at build time rather than
+      # committed into docs/, so .spectial/ stays the single source of truth.
+      - run: cp .spectial/graph.html docs/graph.html
       - run: mkdocs build --strict --site-dir _site
       - uses: actions/upload-pages-artifact@v3
         with:
