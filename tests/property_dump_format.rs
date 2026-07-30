@@ -111,6 +111,14 @@ proptest! {
     /// A truncated blob — an interrupted upload, a partial download — must
     /// surface as an error, never as a short but plausible-looking document
     /// stream that would silently restore an incomplete collection.
+    ///
+    /// A cut *inside* a document is detectable here and must error. A cut
+    /// exactly on a document boundary is not: the blob is a bare concatenation
+    /// with no end marker, so the reader cannot distinguish it from a clean
+    /// end of stream. That case is caught one level up, by restore comparing
+    /// the documents it read against the count recorded in the collection
+    /// metadata — see `truncated_blob_fails_the_collection_instead_of_
+    /// restoring_short` in `src/restore/database.rs`.
     #[test]
     fn truncated_blobs_are_rejected_not_silently_short(
         docs in prop::collection::vec(strategies::document(), 1..8),

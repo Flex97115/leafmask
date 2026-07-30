@@ -94,6 +94,12 @@ struct RestoreItem {
 struct InsertOutcome {
     inserted: u64,
     skipped: u64,
+    /// Documents pulled off the dump's data blob, whatever became of them.
+    /// Counted separately from `inserted`/`skipped` because neither tracks
+    /// reads one-for-one: an ordered batch re-submits around excluded
+    /// failures. This is what the completeness check compares against the
+    /// document count recorded when the dump was written.
+    read: u64,
 }
 
 /// Outcome of restoring one collection end to end (documents plus, unless
@@ -250,6 +256,27 @@ impl<'a> Restore<'a> {
         let (outcome, insert_result) = self.insert_documents(dump_id, db, coll);
         result.inserted = outcome.inserted;
         result.skipped = outcome.skipped;
+        // A data blob is a bare concatenation of BSON documents with no end
+        // marker, so a blob truncated on a document boundary — an interrupted
+        // upload, a partial download — reads back as a clean, short stream that
+        // is indistinguishable from a complete one. The count recorded when the
+        // dump was written is the only thing that can catch it, and restoring a
+        // silently incomplete collection is far worse than failing loudly.
+        //
+        // Only a shortfall is an error: metadata written before `document_count`
+        // existed decodes to 0 (it is `#[serde(default)]`), and such a dump must
+        // still restore rather than fail against a count nobody recorded.
+        let insert_result = insert_result.and_then(|()| {
+            if outcome.read < cmeta.document_count {
+                Err(Error::Restore(format!(
+                    "{db}.{coll} is incomplete: the dump records {} documents but only {} could \
+                     be read — the data blob is truncated or corrupt",
+                    cmeta.document_count, outcome.read
+                )))
+            } else {
+                Ok(())
+            }
+        });
         match insert_result {
             Ok(()) => {}
             Err(e) if self.options.exit_on_error => {
@@ -293,6 +320,7 @@ impl<'a> Restore<'a> {
             if batch.is_empty() {
                 return (outcome, Ok(()));
             }
+            outcome.read += batch.len() as u64;
             if let Err(e) = self.insert_batch(db, coll, &batch, &mut outcome) {
                 return (outcome, Err(e));
             }
@@ -448,6 +476,105 @@ mod tests {
         let report = r.run("latest", &NoScripts).unwrap();
         assert_eq!(report.inserted, 2);
         assert_eq!(sink.documents("app", "users").len(), 2);
+    }
+
+    /// Truncate a collection's data blob after `keep` whole documents,
+    /// simulating an upload or download that stopped cleanly on a document
+    /// boundary — the case a bare concatenation cannot detect on its own.
+    fn truncate_blob_after(storage: &DirectoryStorage, id: &str, keep: usize) {
+        use crate::storage::Storage;
+        let path = format!("{id}/{}", crate::dump::data_path("app", "users", false));
+        let full = storage.get(&path).unwrap();
+        let mut end = 0usize;
+        for _ in 0..keep {
+            let len = i32::from_le_bytes(full[end..end + 4].try_into().unwrap()) as usize;
+            end += len;
+        }
+        storage.put(&path, &full[..end]).unwrap();
+    }
+
+    // A dump whose data blob was truncated on a document boundary must fail
+    // the restore, not report success having written a short collection. The
+    // blob is a bare concatenation with no end marker, so a clean cut is
+    // indistinguishable from end-of-stream — the recorded document_count is
+    // the only thing that can catch it.
+    #[test]
+    fn truncated_blob_fails_the_collection_instead_of_restoring_short() {
+        let (_d, s) = seed_dump(
+            "20260701",
+            &[doc(1), doc(2), doc(3), doc(4), doc(5)],
+            vec![],
+        );
+        truncate_blob_after(&s, "20260701", 2);
+
+        let sink = InMemoryMongo::new();
+        let report = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
+        }
+        .run("20260701", &NoScripts)
+        .unwrap();
+
+        assert_eq!(
+            report.failed,
+            vec!["app.users".to_string()],
+            "a truncated blob must be reported as a failed collection"
+        );
+    }
+
+    // The same truncation with `exit_on_error` must abort the whole restore.
+    #[test]
+    fn truncated_blob_aborts_the_restore_with_exit_on_error() {
+        let (_d, s) = seed_dump("20260701", &[doc(1), doc(2), doc(3)], vec![]);
+        truncate_blob_after(&s, "20260701", 1);
+
+        let sink = InMemoryMongo::new();
+        let err = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                exit_on_error: true,
+                ..Default::default()
+            },
+        }
+        .run("20260701", &NoScripts)
+        .expect_err("truncated blob must abort the restore");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("app.users") && msg.contains('3') && msg.contains('1'),
+            "error must name the collection and both counts, got: {msg}"
+        );
+    }
+
+    // A collection that is genuinely empty declares zero documents and reads
+    // zero, so the completeness check must not fire on it.
+    #[test]
+    fn empty_collection_restores_without_a_completeness_error() {
+        let (_d, s) = seed_dump("20260701", &[], vec![]);
+        let sink = InMemoryMongo::new();
+        let report = Restore {
+            storage: &s,
+            sink: &sink,
+            exclusions: Default::default(),
+            scripts: Default::default(),
+            options: RestoreOptions {
+                batch_size: 10,
+                ..Default::default()
+            },
+        }
+        .run("20260701", &NoScripts)
+        .unwrap();
+        assert!(report.failed.is_empty(), "empty collection must restore");
+        assert_eq!(report.inserted, 0);
     }
 
     // Acceptance: re-running a restore into a target that already holds data

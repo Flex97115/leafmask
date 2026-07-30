@@ -84,6 +84,13 @@ Rules that keep this working:
 - A dump's data blob is a plain concatenation of BSON documents (mongodump-style framing), never
   one wrapper document — a single wrapper would cap a collection at BSON's i32/2 GiB limit and
   force it into memory. See `CollectionDataWriter`/`DocumentReader` in `src/dump/mod.rs`.
+  The framing has no end marker, so a blob truncated *on a document boundary* is
+  indistinguishable from a clean end of stream at the reader level. `CollectionMeta.document_count`
+  is what closes that hole: restore compares it against the documents it actually read and fails
+  the collection on a shortfall (`src/restore/database.rs`). Keep that check whenever you touch the
+  restore read path — without it an interrupted upload restores as a silently short collection.
+  Only a shortfall is an error: metadata predating the field decodes to `0` via `serde(default)`
+  and must still restore.
 - Transformers are deterministic: `HashEngine` (`src/hash.rs`) derives every pseudo-random output
   purely from `SHA-256(salt || input)` — no RNG, no time input, no shared mutable state. Same
   input always produces the same output, across runs, machines, and dump worker threads
