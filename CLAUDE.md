@@ -105,3 +105,13 @@ Rules that keep this working:
 - When adding or touching a CLI flag in `src/cli.rs`, verify it's actually read in the matching
   `cmd_*` function (or the options struct it builds) — `clap` will happily accept a flag that
   nothing downstream consumes. (`dump --jobs` was silently unused this way before it was wired up.)
+- **Adding a key to the `dump:` or `restore:` config section means adding it to `DUMP_KEYS` /
+  `RESTORE_KEYS` in `src/config.rs` too.** Those sections deserialize as raw `serde_yaml::Value`
+  and are then refined by several narrow structs in `cli.rs`, so no single struct can carry
+  `deny_unknown_fields` without rejecting the others' legitimate keys — the key lists stand in for
+  it. Forget the list and your new key is rejected (loud, you'll hit it immediately); remove the
+  check and a mistyped key is silently ignored, which for `dump.transformation` means **a
+  successful dump containing completely unmasked data**. That is the single worst failure this
+  tool has, so the check is not optional.
+- `config.validate` is declared on `Config` but nothing reads it — keys under `validate:` are
+  accepted and do nothing. Either wire it up or drop the field; don't add to it.

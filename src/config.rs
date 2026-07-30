@@ -214,8 +214,72 @@ fn is_valid_env_name(name: &str) -> bool {
 
 /// Parse an already-interpolated YAML string into `Config`, rejecting unknown
 /// keys. Kept generic-free for a clear error surface.
+/// Keys accepted inside the `dump:` section.
+///
+/// The section is deserialized as a raw `serde_yaml::Value` and then refined by
+/// several narrow structs in `cli.rs`, each picking out only the keys it needs
+/// (`transformation`, `subset_conds`, the four filter lists). No single one of
+/// them can carry `deny_unknown_fields` without rejecting the others' perfectly
+/// legitimate keys, so this list stands in for it. Keep it in sync with those
+/// structs — a key missing here is rejected even though it works.
+const DUMP_KEYS: &[&str] = &[
+    "transformation",
+    "subset_conds",
+    "include_databases",
+    "exclude_databases",
+    "include_collections",
+    "exclude_collections",
+];
+
+/// Keys accepted inside the `restore:` section. Same reasoning as [`DUMP_KEYS`]:
+/// split across `cmd_restore`'s own section struct and `restore_filter_lists`.
+const RESTORE_KEYS: &[&str] = &[
+    "insert_error_exclusions",
+    "scripts",
+    "clean",
+    "include_collections",
+    "exclude_collections",
+    "include_indexes",
+    "exclude_indexes",
+];
+
+/// Reject unknown keys inside a raw section, matching serde's message shape.
+///
+/// Silently ignoring one of these is not a cosmetic problem: a `dump:` section
+/// whose `transformation` key is misspelled applies no transformers at all, and
+/// the dump then completes successfully while writing unmasked production data.
+/// Failing the run is the only safe outcome.
+fn check_section_keys(section: &str, value: &serde_yaml::Value, known: &[&str]) -> Result<()> {
+    // A null (absent) section, or one that is not a mapping at all, is left to
+    // the narrow structs to report — they produce a better type error than
+    // anything this function could say.
+    let Some(mapping) = value.as_mapping() else {
+        return Ok(());
+    };
+    for key in mapping.keys() {
+        let Some(name) = key.as_str() else { continue };
+        if !known.contains(&name) {
+            let expected = known
+                .iter()
+                .map(|k| format!("`{k}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(Error::Config(format!(
+                "{section}: unknown field `{name}`, expected one of {expected}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn parse_str(interpolated: &str) -> Result<Config> {
-    serde_yaml::from_str::<Config>(interpolated).map_err(|e| Error::Config(e.to_string()))
+    let config =
+        serde_yaml::from_str::<Config>(interpolated).map_err(|e| Error::Config(e.to_string()))?;
+    // Top-level keys are already covered by `deny_unknown_fields` on `Config`;
+    // these two sections are raw values, so they need checking by hand.
+    check_section_keys("dump", &config.dump, DUMP_KEYS)?;
+    check_section_keys("restore", &config.restore, RESTORE_KEYS)?;
+    Ok(config)
 }
 
 /// Full load pipeline: read the file at `path`, interpolate `${VAR}` from the
@@ -340,6 +404,115 @@ mod tests {
         let err = parse_str("common:\n  tmp_dir: /t\nbogus_key: 1\n").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("bogus_key"), "message was: {msg}");
+    }
+
+    // The failure this guards against is the worst one this tool has: a
+    // mistyped `transformation` key means no transformers are applied, the
+    // dump succeeds, and unmasked production data is written out looking for
+    // all the world like an anonymized dump.
+    #[test]
+    fn rejects_a_mistyped_transformation_section() {
+        let err = parse_str(
+            "dump:\n  transformations:\n    - collection: users\n      transformers:\n        - field: email\n          name: random_email\n",
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("transformations") && msg.contains("transformation"),
+            "the error must name the bad key and offer the real one, got: {msg}"
+        );
+    }
+
+    // Every key the `dump:` and `restore:` sections are refined into by cli.rs
+    // must still parse. This is the guard against the check above being too
+    // strict: rejecting a legitimate key would break working configs.
+    #[test]
+    fn accepts_every_documented_dump_and_restore_key() {
+        let cfg = parse_str(
+            "dump:\n\
+             \x20 transformation: []\n\
+             \x20 subset_conds: {}\n\
+             \x20 include_databases: [a]\n\
+             \x20 exclude_databases: [b]\n\
+             \x20 include_collections: [c]\n\
+             \x20 exclude_collections: [d]\n\
+             restore:\n\
+             \x20 clean: true\n\
+             \x20 insert_error_exclusions: {}\n\
+             \x20 scripts: {}\n\
+             \x20 include_collections: [e]\n\
+             \x20 exclude_collections: [f]\n\
+             \x20 include_indexes: [g]\n\
+             \x20 exclude_indexes: [h]\n",
+        )
+        .expect("every known key must be accepted");
+        assert!(!cfg.dump.is_null() && !cfg.restore.is_null());
+    }
+
+    // An unknown key under `restore:` is rejected the same way.
+    #[test]
+    fn rejects_unknown_keys_inside_the_restore_section() {
+        let err = parse_str("restore:\n  cleanup: true\n").unwrap_err();
+        assert!(err.to_string().contains("cleanup"), "message was: {err}");
+    }
+
+    // The config in the docs must actually load. It drifted before: it showed
+    // `subset_conds` as a top-level section when the code reads it from inside
+    // `dump:`, so anyone copying the documented example hit
+    // "unknown field `subset_conds`" on their first run.
+    // Note this couples the test suite to `docs/`. The release build is
+    // unaffected (`#[cfg(test)]` is not compiled by `cargo build`, which is all
+    // the Dockerfile runs — `.dockerignore` drops `*.md`), but `cargo test`
+    // does need the file present.
+    #[test]
+    fn the_documented_example_config_parses() {
+        let markdown = include_str!("../docs/config-example.md");
+        let yaml = markdown
+            .split("```yaml")
+            .nth(1)
+            // The fence carries an info string (`title="leafmask.yaml"`);
+            // the YAML itself starts on the next line.
+            .and_then(|rest| rest.split_once('\n'))
+            .and_then(|(_info, body)| body.split("```").next())
+            .expect("docs/config-example.md must contain a ```yaml block");
+
+        // The example interpolates ${VAR}s; supply them rather than depending
+        // on the developer's environment.
+        let env: BTreeMap<String, String> = [
+            ("LEAFMASK_SALT", "salt"),
+            ("MONGO_URI", "mongodb://localhost:27017"),
+            ("AWS_ACCESS_KEY_ID", "id"),
+            ("AWS_SECRET_ACCESS_KEY", "secret"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        let cfg = load_str_with_env(yaml, &env)
+            .unwrap_or_else(|e| panic!("documented example config does not load: {e}"));
+
+        // And the sections it advertises really are the ones the code reads.
+        let transformations: Vec<crate::transform::apply::TransformationConfig> =
+            serde_yaml::from_value(
+                cfg.dump
+                    .get("transformation")
+                    .cloned()
+                    .expect("example declares dump.transformation"),
+            )
+            .expect("dump.transformation decodes");
+        assert!(!transformations.is_empty());
+        assert!(
+            cfg.dump.get("subset_conds").is_some(),
+            "example must keep subset_conds inside the dump section"
+        );
+    }
+
+    // Absent or empty sections stay valid — neither is a typo.
+    #[test]
+    fn absent_and_empty_sections_are_accepted() {
+        parse_str("common:\n  tmp_dir: /t\n").expect("absent sections");
+        parse_str("dump:\nrestore:\n").expect("null sections");
+        parse_str("dump: {}\nrestore: {}\n").expect("empty sections");
     }
 
     // Acceptance: transformer params parse correctly regardless of key casing.

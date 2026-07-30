@@ -76,6 +76,11 @@ dump:
             max_days:
               field: retention_days       # bound taken from the document
 
+  # Referential subsetting: dump only the documents matching each condition.
+  # Note this is nested under `dump:`, not a top-level section.
+  subset_conds:
+    orders: "total > 100 and region == 'EU'"
+
 # ---------------------------------------------------------------------------
 # Your own transformers
 # ---------------------------------------------------------------------------
@@ -94,10 +99,10 @@ custom_transformers:
 
 # ---------------------------------------------------------------------------
 # Referential subsetting (see the Subsetting page for status)
+#
+# `subset_conds` lives inside the `dump:` section above — it is shown there,
+# next to `transformation`.
 # ---------------------------------------------------------------------------
-subset_conds:
-  orders: "total > 100 and region == 'EU'"
-
 virtual_references:
   - collection: orders
     references:
