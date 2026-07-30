@@ -15,7 +15,7 @@
 
 mod support;
 
-use bson::Document;
+use bson::{Bson, Document};
 use leafmask::config::Params;
 use leafmask::hash::HashEngine;
 use leafmask::toolkit::{ParamDefinition, ParamType};
@@ -129,49 +129,69 @@ proptest! {
         }
     }
 
-    /// Different salts must actually change output. A transformer that ignores
-    /// the engine would silently produce identical "anonymized" values across
-    /// every deployment sharing this tool — the salt would be decorative.
-    #[test]
-    fn salt_changes_output_for_hash_derived_transformers(
-        value in strategies::scalar(),
-    ) {
-        // Only transformers whose output is hash-derived by contract; the
-        // others (set_null, replace, masking with a fixed char) are constant
-        // by design.
-        const HASH_DERIVED: &[&str] = &[
-            "hash",
-            "random_int",
-            "random_float",
-            "random_email",
-            "random_person",
-            "random_object_id",
-            "random_bytes",
-        ];
-        let params_by_name = all_transformer_params();
-        let mut differed = 0;
-        for (name, params) in &params_by_name {
-            if !HASH_DERIVED.contains(&name.as_str()) {
-                continue;
-            }
-            let a = Registry::with_builtins()
-                .instantiate(name, params, &HashEngine::new("salt-a"));
-            let b = Registry::with_builtins()
-                .instantiate(name, params, &HashEngine::new("salt-b"));
-            let (Ok(a), Ok(b)) = (a, b) else { continue };
-            let doc = Document::new();
-            if let (Ok(x), Ok(y)) = (a.transform(&value, &doc), b.transform(&value, &doc)) {
-                if x != y {
-                    differed += 1;
-                }
-            }
-        }
-        // Some inputs legitimately collide for a given transformer (a small
-        // `random_int` range, say), so require the salt to matter *somewhere*
-        // rather than everywhere.
-        prop_assert!(
-            differed > 0,
-            "no hash-derived transformer changed output when the salt changed, for {value:?}"
+}
+
+/// Transformers whose output is hash-derived by contract. The rest
+/// (`set_null`, `replace`, `masking` with a fixed char) are constant by design
+/// and must not be listed here.
+const HASH_DERIVED: &[&str] = &[
+    "hash",
+    "random_int",
+    "random_float",
+    "random_email",
+    "random_person",
+    "random_company",
+    "random_object_id",
+    "random_bytes",
+];
+
+/// Changing the salt must actually change output — for *each* hash-derived
+/// transformer independently. A transformer that ignored the engine would
+/// produce identical "anonymized" values across every deployment running this
+/// tool, making the salt decorative and the anonymization reversible by anyone
+/// with a copy of Leafmask.
+///
+/// Deliberately not a proptest: a single generated input collides often enough
+/// (a narrow `random_int` range, say) that a per-transformer assertion would be
+/// flaky. Instead every transformer is tried against a fixed spread of inputs
+/// and must differ on at least one — strict per transformer, and deterministic.
+#[test]
+fn salt_changes_output_for_every_hash_derived_transformer() {
+    let inputs: Vec<Bson> = (0..64)
+        .map(|i| Bson::String(format!("user{i}@example.com")))
+        .chain((0..64).map(|i| Bson::Int64(i * 7919)))
+        .chain([Bson::Boolean(true), Bson::Null, Bson::Double(1.5)])
+        .collect();
+
+    let params_by_name = all_transformer_params();
+    for name in HASH_DERIVED {
+        let (_, params) = params_by_name
+            .iter()
+            .find(|(n, _)| n == name)
+            // Guards against the list rotting: a renamed or removed
+            // transformer must fail here, not be silently skipped.
+            .unwrap_or_else(|| panic!("HASH_DERIVED lists '{name}', which is not registered"));
+
+        let a = Registry::with_builtins()
+            .instantiate(name, params, &HashEngine::new("salt-a"))
+            .expect("build with salt-a");
+        let b = Registry::with_builtins()
+            .instantiate(name, params, &HashEngine::new("salt-b"))
+            .expect("build with salt-b");
+
+        let doc = Document::new();
+        let differed =
+            inputs.iter().any(
+                |value| match (a.transform(value, &doc), b.transform(value, &doc)) {
+                    (Ok(x), Ok(y)) => x != y,
+                    _ => false,
+                },
+            );
+        assert!(
+            differed,
+            "transformer '{name}' produced identical output under two different salts \
+             for all {} probe inputs — its output does not depend on the salt",
+            inputs.len()
         );
     }
 }

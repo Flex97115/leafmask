@@ -22,9 +22,6 @@ use bson::{Bson, Document};
 /// event rather than a silent one.
 pub const SUPPORTED_SERVER_VERSIONS: &[(u32, u32)] = &[(6, 0), (7, 0), (8, 0)];
 
-/// The oldest server release the suite is expected to pass against.
-pub const MIN_SUPPORTED_SERVER: (u32, u32) = (6, 0);
-
 /// The MongoDB URI under test (`LEAFMASK_MONGO_URI`, default local).
 pub fn uri() -> String {
     std::env::var("LEAFMASK_MONGO_URI").unwrap_or_else(|_| "mongodb://localhost:27017".into())
@@ -124,9 +121,14 @@ pub mod strategies {
     use super::*;
     use proptest::prelude::*;
 
-    /// A BSON scalar. Deliberately excludes the types Leafmask never writes
-    /// itself (JavaScript code with scope, DBPointer, and the min/max keys),
-    /// which no MongoDB deployment produces for ordinary user data either.
+    /// A BSON scalar, covering every type Leafmask can write to a dump —
+    /// deliberately including Decimal128, Timestamp and RegularExpression,
+    /// which `mongo_version_matrix.rs` proves survive a real server round trip
+    /// and which must therefore survive the dump format too.
+    ///
+    /// Excluded on purpose: JavaScript (with and without scope), DBPointer,
+    /// Symbol, Undefined, and the min/max keys — deprecated or internal types
+    /// that no deployment produces for ordinary user data.
     pub fn scalar() -> impl Strategy<Value = Bson> {
         prop_oneof![
             Just(Bson::Null),
@@ -145,11 +147,27 @@ pub mod strategies {
                     bytes,
                 }
             )),
-            // Timestamps are only millisecond-precise once round-tripped, so
-            // generate whole milliseconds to keep equality exact.
+            // Dates are millisecond-precise; generate whole milliseconds within
+            // the range chrono can represent so equality stays exact.
             (-62_135_596_800_000i64..253_402_300_799_000i64)
                 .prop_map(|ms| Bson::DateTime(bson::DateTime::from_millis(ms))),
             any::<[u8; 12]>().prop_map(|b| Bson::ObjectId(bson::oid::ObjectId::from_bytes(b))),
+            (any::<u32>(), any::<u32>())
+                .prop_map(|(time, increment)| Bson::Timestamp(bson::Timestamp { time, increment })),
+            // Built from an integer literal: an arbitrary 16-byte pattern can
+            // decode to Decimal128 NaN, which (like f64 NaN) is not equal to
+            // itself and would make round-trip equality meaningless.
+            any::<i64>().prop_map(|n| Bson::Decimal128(
+                n.to_string().parse().expect("integer parses as decimal128")
+            )),
+            // Options must be sorted and unique — BSON stores them as written,
+            // but MongoDB only ever emits them in canonical order.
+            ("[a-z ]{0,12}", prop::collection::btree_set("[imsx]", 0..4)).prop_map(
+                |(pattern, options)| Bson::RegularExpression(bson::Regex {
+                    pattern,
+                    options: options.into_iter().collect::<Vec<_>>().concat(),
+                })
+            ),
         ]
     }
 
