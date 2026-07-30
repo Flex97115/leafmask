@@ -9,36 +9,25 @@
 //!
 //! The URI is taken from `LEAFMASK_MONGO_URI` (default `mongodb://localhost:27017`).
 //! Each test uses a uniquely-named database and drops it afterwards.
+//!
+//! These tests cover the adapter's *behaviour*. The server-version contract it
+//! depends on — error codes, catalog shapes, BSON fidelity — lives in
+//! `mongo_version_matrix.rs`, which CI runs against every supported release.
 #![cfg(feature = "mongo")]
+
+mod support;
 
 use std::collections::BTreeMap;
 
 use bson::{doc, Bson, Document};
 use leafmask::dump::{list_metadata, read_collection_full, Dump, DumpOptions};
 use leafmask::hash::HashEngine;
-use leafmask::mongo::{MongoDriver, MongoSink, MongoSource};
+use leafmask::mongo::{MongoSink, MongoSource};
 use leafmask::restore::{ErrorExclusions, Restore, RestoreOptions};
 use leafmask::storage::DirectoryStorage;
 use leafmask::transform::{apply::TransformationPlan, Registry};
 use leafmask::validate::IndexSpec;
-
-fn uri() -> String {
-    std::env::var("LEAFMASK_MONGO_URI").unwrap_or_else(|_| "mongodb://localhost:27017".into())
-}
-
-/// A unique database name per test, so parallel tests do not collide.
-fn db_name(tag: &str) -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("leafmask_it_{tag}_{}_{}", std::process::id(), nanos)
-}
-
-fn connect() -> MongoDriver {
-    MongoDriver::connect(&uri()).expect("connect to MongoDB (is the container running?)")
-}
+use support::{connect, db_name, uri};
 
 fn user(id: i64, email: &str) -> Document {
     doc! { "_id": id, "email": email }

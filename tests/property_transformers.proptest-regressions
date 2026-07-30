@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e43051fc0a6a0328b77c457af22ee6297f7b95308e81ca0a67d56ba16260aa90 # shrinks to value = Double(3.5131652415029827e25), doc = Document({})

@@ -58,6 +58,7 @@ full = ["mongo", "s3", "azure", "ssh"]
 integration-tests = ["dep:testcontainers-modules", "testcontainers-modules/blocking", "testcontainers-modules/minio", "testcontainers-modules/azurite"]
 
 [dev-dependencies]
+proptest = "1.11.0"
 tempfile = "3"
 
 # Release binaries: smaller and faster.

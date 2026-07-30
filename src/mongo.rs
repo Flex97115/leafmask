@@ -421,6 +421,38 @@ mod driver {
                 .block_on(self.client.database(db).drop().into_future())
                 .map_err(|e| Error::Mongo(format!("drop database: {e}")))
         }
+
+        /// The connected server's `(major, minor, patch)` version, from
+        /// `buildInfo`. Leafmask supports a range of server releases, so the
+        /// integration suite uses this to gate assertions on behaviour that
+        /// genuinely differs between them, instead of pinning to one version.
+        pub fn server_version(&self) -> Result<(u32, u32, u32)> {
+            let info = self
+                .rt
+                .block_on(
+                    self.client
+                        .database("admin")
+                        .run_command(bson::doc! { "buildInfo": 1 })
+                        .into_future(),
+                )
+                .map_err(|e| Error::Mongo(format!("buildInfo: {e}")))?;
+            let raw = info
+                .get_str("version")
+                .map_err(|e| Error::Mongo(format!("buildInfo.version: {e}")))?;
+            parse_server_version(raw)
+                .ok_or_else(|| Error::Mongo(format!("unparseable server version {raw:?}")))
+        }
+    }
+
+    /// Parse the leading `major.minor.patch` of a server version string
+    /// (`"7.0.14"`, `"8.0.0-rc1"`); missing components read as 0.
+    fn parse_server_version(raw: &str) -> Option<(u32, u32, u32)> {
+        let core = raw.split(['-', '+']).next()?;
+        let mut parts = core.split('.');
+        let major = parts.next()?.parse().ok()?;
+        let minor = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        let patch = parts.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        Some((major, minor, patch))
     }
 
     impl MongoSource for MongoDriver {
@@ -820,5 +852,22 @@ mod driver {
             .nth(1)
             .and_then(|s| s.split_whitespace().next())
             .map(|s| s.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::parse_server_version;
+
+        // The version matrix keys off this parse, and server builds carry
+        // pre-release and build suffixes that must not defeat it.
+        #[test]
+        fn parses_release_and_prerelease_versions() {
+            assert_eq!(parse_server_version("7.0.14"), Some((7, 0, 14)));
+            assert_eq!(parse_server_version("8.0.0-rc1"), Some((8, 0, 0)));
+            assert_eq!(parse_server_version("8.0.0+build.5"), Some((8, 0, 0)));
+            assert_eq!(parse_server_version("6.0"), Some((6, 0, 0)));
+            assert_eq!(parse_server_version("9"), Some((9, 0, 0)));
+            assert_eq!(parse_server_version("not-a-version"), None);
+        }
     }
 }

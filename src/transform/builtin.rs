@@ -119,9 +119,14 @@ pub fn register_all(r: &mut Registry) {
                 let base = cast::to_i64(v)
                     .ok_or_else(|| Error::Transform("noise_int needs an integer".into()))?;
                 let bytes = cast::to_hashable_bytes(v);
-                let signed = unit(&engine, &bytes) * 2.0 - 1.0; // [-1, 1)
+                // `signed` lands in [-1, 1). `as i64` saturates (and maps NaN
+                // to 0), and the sum is saturating too: a value near i64::MAX
+                // must clamp, never wrap into a negative number. Release builds
+                // have overflow checks off, so a plain `+` would silently
+                // corrupt the dump rather than panic.
+                let signed = unit(&engine, &bytes) * 2.0 - 1.0;
                 let delta = (base as f64 * ratio * signed).round() as i64;
-                Ok(Bson::Int64(base + delta))
+                Ok(Bson::Int64(base.saturating_add(delta)))
             }))
         },
     ));
@@ -162,7 +167,12 @@ pub fn register_all(r: &mut Registry) {
             Ok(boxed(move |v, _| match v {
                 Bson::DateTime(dt) => {
                     let shift = engine.ranged_i64(&cast::to_hashable_bytes(v), -max_days, max_days);
-                    let ms = dt.timestamp_millis() + shift * 86_400_000;
+                    // Saturating throughout: an absurd `max_days`, or a date
+                    // near the i64 millisecond bounds, must clamp rather than
+                    // wrap a far-future date into the distant past.
+                    let ms = dt
+                        .timestamp_millis()
+                        .saturating_add(shift.saturating_mul(86_400_000));
                     Ok(Bson::DateTime(DateTime::from_millis(ms)))
                 }
                 _ => Err(Error::Transform("noise_date needs a datetime".into())),
@@ -363,6 +373,57 @@ mod tests {
     }
     fn engine() -> HashEngine {
         HashEngine::new("test-salt")
+    }
+
+    // Regression: a value whose i64 cast saturates near the bounds used to
+    // overflow the perturbation sum — a panic that kills a dump worker in
+    // debug, and a silent wrap to a wildly wrong value in release, where
+    // overflow checks are off. Found by `tests/property_transformers.rs`.
+    #[test]
+    fn noise_int_saturates_instead_of_overflowing() {
+        let r = Registry::with_builtins();
+        let t = r
+            .instantiate("noise_int", &params("ratio: 0.5\n"), &engine())
+            .unwrap();
+        let doc = Document::new();
+        for input in [
+            Bson::Int64(i64::MAX),
+            Bson::Int64(i64::MIN),
+            Bson::Double(3.5131652415029827e25),
+            Bson::Double(-3.5131652415029827e25),
+            Bson::Double(f64::MAX),
+        ] {
+            let out = t
+                .transform(&input, &doc)
+                .expect("noise_int accepts numbers");
+            // The point is that it returns a legal i64 at all; the specific
+            // clamped value is unimportant, wrapping to the opposite sign is
+            // what must never happen.
+            assert!(matches!(out, Bson::Int64(_)), "unexpected output {out:?}");
+        }
+    }
+
+    // Regression: shifting a date by a huge `max_days`, or shifting a date
+    // already near the i64 millisecond bounds, used to overflow — wrapping a
+    // far-future date into the distant past.
+    #[test]
+    fn noise_date_saturates_instead_of_overflowing() {
+        let r = Registry::with_builtins();
+        let doc = Document::new();
+        for cfg in ["max_days: 30\n", "max_days: 9223372036854775807\n"] {
+            let t = r
+                .instantiate("noise_date", &params(cfg), &engine())
+                .unwrap();
+            for ms in [0i64, i64::MAX, i64::MIN, 1_600_000_000_000] {
+                let out = t
+                    .transform(&Bson::DateTime(DateTime::from_millis(ms)), &doc)
+                    .expect("noise_date accepts datetimes");
+                assert!(
+                    matches!(out, Bson::DateTime(_)),
+                    "unexpected output {out:?}"
+                );
+            }
+        }
     }
 
     // Acceptance: each built-in is registered with name, description, typed

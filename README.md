@@ -52,6 +52,33 @@ for staging, CI, or local development.
 - 🔍 **Preview before you run** — `validate --data` shows a before/after diff
   against a live sample, without producing a dump.
 
+## Compatibility
+
+Every release below runs the **full integration suite** in CI — dump, restore,
+subsetting, BSON round-trip fidelity, error codes, and index semantics — so
+support is verified on each commit, not assumed:
+
+| MongoDB | Tested against | Status |
+| --- | --- | --- |
+| **6.0** | `mongo:6.0` | ✅ full suite in CI |
+| **7.0** | `mongo:7.0` | ✅ full suite in CI |
+| **8.0** | `mongo:8.0` | ✅ full suite in CI |
+
+CI runs the `mongo`-gated suite once per version
+([matrix](.github/workflows/ci.yml)), and
+[`tests/mongo_version_matrix.rs`](tests/mongo_version_matrix.rs) pins the
+server behaviour Leafmask depends on. Reproduce locally with Docker:
+
+```sh
+make test-mongo-matrix          # every supported version
+./scripts/test-mongo-matrix.sh 8.0   # just one
+```
+
+Pointing the suite at a release that isn't declared supported fails loudly
+rather than quietly implying it works. See
+[supported versions](#supported-mongodb-versions) for how to add a future
+release.
+
 ## Performance
 
 Measured with `leafmask bench` — synthetic "client" documents (~10 fields:
@@ -153,14 +180,47 @@ Full reference: [Commands](https://flex97115.github.io/leafmask/commands/).
 ## Development
 
 ```sh
-cargo test                    # 94 unit tests, no external services
+cargo test                    # unit + property tests, no external services
 cargo test --features mongo   # + live integration tests (needs MongoDB on :27017)
+make test-mongo-matrix        # the integration suite on every supported MongoDB
+make test-storage             # S3/Azure against real MinIO/Azurite containers
 make lint                     # cargo fmt --check + clippy -D warnings (full features)
 ```
 
 The MongoDB adapter has live integration tests. Start a database with
 `docker run -d -p 27017:27017 mongo:7` (URI defaults to
 `mongodb://localhost:27017`, overridable via `LEAFMASK_MONGO_URI`).
+
+### Testing layers
+
+Leafmask writes anonymized data into live databases, so the tests are built to
+catch boundary bugs, not just logic bugs:
+
+| Layer | Runs against | Catches |
+| --- | --- | --- |
+| **Unit** (`src/`) | in-memory fakes | logic, config, transformer semantics |
+| **Property** (`tests/property_*.rs`) | pure, no services | invariants across generated inputs — dump-format round trips, transformer determinism |
+| **Integration** (`tests/*_integration.rs`) | real MongoDB, MinIO, Azurite | driver behaviour, wire formats, streaming paths |
+| **Version matrix** (`tests/mongo_version_matrix.rs`) | every supported MongoDB release | server contract drift — error codes, catalog shapes, BSON fidelity |
+
+### Supported MongoDB versions
+
+The tested releases are listed under [Compatibility](#compatibility). Adding a
+future release is a three-line change — `SUPPORTED_SERVER_VERSIONS` in
+[`tests/support/mod.rs`](tests/support/mod.rs), the `integration` matrix in
+[`ci.yml`](.github/workflows/ci.yml), and `DEFAULT_VERSIONS` in
+[`scripts/test-mongo-matrix.sh`](scripts/test-mongo-matrix.sh) — after which
+the whole suite must pass against it before the release is claimed as
+supported.
+
+### Coverage
+
+Coverage is a **blocking CI gate**: at least **85% line** and **75% function**
+coverage, measured over the unit, property, and MongoDB integration suites.
+Check it locally with `make coverage` (needs
+[cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) and a MongoDB on
+`:27017`). Raise the floors in the Makefile and `ci.yml` when the real numbers
+rise; never lower them to turn a red build green.
 
 ## Releasing
 
@@ -202,9 +262,7 @@ the widest blast radius — change either and most of the product moves.
 The graph is generated, not hand-drawn: `spectial:extract` writes
 `.spectial/graph.html` alongside [`graph.json`](.spectial/graph.json),
 [`graph.mmd`](.spectial/graph.mmd), and a
-[report](.spectial/GRAPH_REPORT.md) of god nodes and leaf features. The Docs
-workflow publishes it to GitHub Pages, because GitHub renders HTML files as
-source rather than as pages.
+[report](.spectial/GRAPH_REPORT.md) of god nodes and leaf features.
 
 ## Credits
 

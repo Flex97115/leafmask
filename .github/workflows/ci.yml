@@ -28,22 +28,125 @@ jobs:
       - name: Clippy (all shipped features)
         run: cargo clippy --all-targets --features full -- -D warnings
 
-  test:
+  # Everything that needs no external service: unit tests plus the property
+  # suites. Fast, so it gates the expensive matrix jobs below.
+  unit:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit + property tests (default features)
+        run: cargo test --locked
+      # Property tests are randomized; a longer run on CI reaches cases a
+      # developer's quick local run never does. Failures are reproducible from
+      # the seed proptest prints, and durable ones get committed to the
+      # `.proptest-regressions` files next to the test.
+      - name: Property tests (extended case count)
+        env:
+          PROPTEST_CASES: 2048
+        run: cargo test --locked --test property_dump_format --test property_transformers
+
+  # The `mongo`-gated suite, run once per supported server release. A MongoDB
+  # version that changes error codes, catalog shapes, or BSON round-trip
+  # fidelity fails here rather than in a user's restore. Keep this matrix in
+  # sync with SUPPORTED_SERVER_VERSIONS in tests/support/mod.rs and with
+  # scripts/test-mongo-matrix.sh.
+  integration:
+    needs: unit
+    runs-on: ubuntu-latest
+    strategy:
+      # Report every failing version in one run, not just the first.
+      fail-fast: false
+      matrix:
+        mongo: ["6.0", "7.0", "8.0"]
+    name: integration (mongo ${{ matrix.mongo }})
     services:
       mongo:
-        image: mongo:7
+        image: mongo:${{ matrix.mongo }}
         ports:
           - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v6
       - name: Install build deps
         run: sudo apt-get update && sudo apt-get install -y cmake pkg-config perl make
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Unit tests (default features)
-        run: cargo test --locked
-      - name: Unit + integration tests (mongo)
+      - name: Unit + integration tests (mongo ${{ matrix.mongo }})
         env:
           LEAFMASK_MONGO_URI: mongodb://localhost:27017
         run: cargo test --locked --features mongo
+
+  # Storage backends against real containerized services (MinIO, Azurite),
+  # started by testcontainers from inside the tests themselves.
+  storage:
+    needs: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config perl make
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: S3 + Azure storage integration tests
+        run: |
+          cargo test --locked --features "s3,azure,integration-tests" \
+            --test s3_integration --test azure_integration
+
+  # Coverage is a blocking gate. The thresholds sit a few points below the
+  # current numbers (88% lines / 78% functions at the time of writing) so
+  # ordinary churn does not fail a correct PR, while deleting or bypassing a
+  # meaningful body of tests does. Raise the floors when the real number rises
+  # — never lower them to make a red build green.
+  coverage:
+    needs: unit
+    runs-on: ubuntu-latest
+    env:
+      MIN_LINE_COVERAGE: 85
+      MIN_FUNCTION_COVERAGE: 75
+    services:
+      mongo:
+        image: mongo:7.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config perl make
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      # Run once, writing the raw profile data, so the gate and the summary
+      # below report the exact same numbers instead of re-running the suite.
+      - name: Coverage (unit + mongo integration)
+        env:
+          LEAFMASK_MONGO_URI: mongodb://localhost:27017
+        run: cargo llvm-cov --locked --features mongo --no-report
+      - name: Publish coverage summary
+        if: always()
+        run: |
+          cargo llvm-cov report --summary-only | tee coverage.txt
+          {
+            echo '## Coverage'
+            echo "Gate: >= ${MIN_LINE_COVERAGE}% lines, >= ${MIN_FUNCTION_COVERAGE}% functions"
+            echo '```'
+            cat coverage.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce coverage thresholds
+        run: |
+          cargo llvm-cov report --summary-only \
+            --fail-under-lines "$MIN_LINE_COVERAGE" \
+            --fail-under-functions "$MIN_FUNCTION_COVERAGE"
