@@ -113,5 +113,7 @@ Rules that keep this working:
   check and a mistyped key is silently ignored, which for `dump.transformation` means **a
   successful dump containing completely unmasked data**. That is the single worst failure this
   tool has, so the check is not optional.
-- `config.validate` is declared on `Config` but nothing reads it — keys under `validate:` are
-  accepted and do nothing. Either wire it up or drop the field; don't add to it.
+- There is deliberately no `validate:` config section — every `validate` option is a CLI flag and
+  resolved warnings live in top-level `resolved_warnings`. It used to exist with no reader, so its
+  keys were accepted and did nothing; it was removed. Don't add a raw section back without giving
+  it a reader and a `*_KEYS` entry in the same change.

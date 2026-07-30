@@ -18,14 +18,22 @@ tests:
 notes: |
   Config surface parsed into typed structs: `common` (tmp_dir, salt),
   `mongodb` (uri), `storage` (type + flattened backend params), and
-  `resolved_warnings`. The `dump`, `restore`, `custom_transformers`,
-  `virtual_references`, and `validate` sections are held as raw YAML values and
-  re-parsed by the features that own them (dump filters, subset_conds,
-  transformation, restore scripts/exclusions, custom transformers, the
-  reference graph) — which is why an unknown key inside one of those sections
-  only surfaces when that feature parses it.
+  `resolved_warnings`. The `dump`, `restore`, `custom_transformers`, and
+  `virtual_references` sections are held as raw YAML values and re-parsed by
+  the features that own them (dump filters, subset_conds, transformation,
+  restore scripts/exclusions, custom transformers, the reference graph).
   Because the root struct denies unknown fields, any config key no feature
-  declares is a hard parse error.
+  declares is a hard parse error. The raw sections cannot rely on that alone —
+  each is refined by several narrow structs picking out different keys, so no
+  one of them can deny unknown fields without rejecting the others' legitimate
+  keys. `DUMP_KEYS`/`RESTORE_KEYS` in `src/config.rs` supply the allowed key
+  set instead, checked at load time; without it a mistyped
+  `dump.transformation` compiles no transformers and the dump succeeds while
+  writing unmasked data.
+  There is no `validate` section: every option of the `validate` command is a
+  CLI flag and resolved warnings live in top-level `resolved_warnings`, so the
+  section had no reader and was removed rather than left to be silently
+  ignored.
   Salt fallback constant: `common.salt` unset -> `"leafmask"` (public, hence
   reversible). See `Common::resolve_salt`, whose second return value drives the
   CLI's default-salt warning.

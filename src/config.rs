@@ -152,9 +152,11 @@ pub struct Config {
     /// propagation follow is declared here), refined by the subset features.
     #[serde(default)]
     pub virtual_references: serde_yaml::Value,
-    /// Raw validate section, refined by the validate features.
-    #[serde(default)]
-    pub validate: serde_yaml::Value,
+    // There is deliberately no `validate` section. Every option of the
+    // `validate` command is a CLI flag, and resolved warnings are read from the
+    // top-level `resolved_warnings` list above — so a `validate:` block had
+    // nothing to carry and was silently ignored. Adding one back means giving
+    // it a reader in the same change.
 }
 
 /// Locate the config file: the explicit `--config` path wins, otherwise the
@@ -420,6 +422,22 @@ mod tests {
         assert!(
             msg.contains("transformations") && msg.contains("transformation"),
             "the error must name the bad key and offer the real one, got: {msg}"
+        );
+    }
+
+    // `validate:` was a declared section that no feature ever read, so its keys
+    // were accepted and did nothing — the same silent-no-op class as a mistyped
+    // `dump.transformation`. Every `validate` option is a CLI flag
+    // (`leafmask validate --data --rows-limit …`) and resolved warnings live in
+    // the top-level `resolved_warnings` list, so there was nothing for the
+    // section to carry. It is gone; declaring it must now be an error.
+    #[test]
+    fn rejects_the_removed_validate_section() {
+        let err = parse_str("validate:\n  strict: true\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("validate"),
+            "the error must name the removed section, got: {msg}"
         );
     }
 
