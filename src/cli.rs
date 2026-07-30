@@ -705,6 +705,18 @@ fn cmd_restore(cli: &Cli, args: &RestoreArgs) -> crate::Result<()> {
         "restored: {} inserted, {} skipped, {} indexes",
         report.inserted, report.skipped, report.indexes_created
     );
+    // Without `--exit-on-error` a failed collection only fails that collection
+    // and the restore carries on (mongorestore semantics) — but the command as
+    // a whole did not succeed, and callers are usually CI pipelines that look
+    // at nothing but the exit code. Reporting success here would let a
+    // half-restored target pass a pipeline silently.
+    if !report.failed.is_empty() {
+        return Err(crate::Error::Restore(format!(
+            "{} of the restored collections failed: {}",
+            report.failed.len(),
+            report.failed.join(", ")
+        )));
+    }
     Ok(())
 }
 

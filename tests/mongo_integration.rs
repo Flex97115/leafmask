@@ -645,3 +645,82 @@ fn bench_round_trips_and_cleans_up() {
     // The bench database must be gone afterwards.
     assert!(!m.databases().unwrap().iter().any(|d| d == "leafmask_bench"));
 }
+
+// A truncated dump must make the `restore` command itself fail, not just log
+// an error and print a success line. Without `--exit-on-error` a failed
+// collection does not abort the restore, so the exit code is the only signal a
+// CI pipeline ever sees — reporting success there would let a half-restored
+// target pass silently. Exercised through `cli::run` so the real command path
+// (and the Err that `main` turns into exit 1) is what gets asserted.
+#[test]
+fn restore_command_fails_when_a_dump_is_truncated() {
+    use clap::Parser;
+    use leafmask::cli::Cli;
+    use leafmask::storage::Storage;
+
+    let m = connect();
+    let db = db_name("cli_truncated");
+    m.ensure_collection(&db, "users", &None, &BTreeMap::new())
+        .unwrap();
+    for i in 1..=5 {
+        m.insert(&db, "users", &user(i, &format!("u{i}@x.com")))
+            .unwrap();
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let dumps = dir.path().join("dumps");
+    std::fs::create_dir_all(&dumps).unwrap();
+    let config_path = dir.path().join("leafmask.yaml");
+    std::fs::write(
+        &config_path,
+        format!(
+            "common:\n  tmp_dir: {tmp}\n  salt: it-salt\nmongodb:\n  uri: {uri}\n\
+             storage:\n  type: directory\n  path: {dumps}\n",
+            tmp = dir.path().display(),
+            uri = uri(),
+            dumps = dumps.display(),
+        ),
+    )
+    .unwrap();
+    let config = config_path.display().to_string();
+
+    // Dump through the CLI, so the blob is written exactly as a user's would be.
+    leafmask::cli::run(Cli::parse_from([
+        "leafmask",
+        "--config",
+        &config,
+        "dump",
+        "--include-db",
+        &db,
+    ]))
+    .expect("dump succeeds");
+
+    // Cut the blob after two whole documents: a clean boundary, which the
+    // reader alone cannot distinguish from end of stream.
+    let storage = DirectoryStorage::new(&dumps).unwrap();
+    let dump_id = list_metadata(&storage).unwrap().pop().unwrap().id;
+    let path = format!(
+        "{dump_id}/{}",
+        leafmask::dump::data_path(&db, "users", false)
+    );
+    let full = storage.get(&path).unwrap();
+    let mut end = 0usize;
+    for _ in 0..2 {
+        end += i32::from_le_bytes(full[end..end + 4].try_into().unwrap()) as usize;
+    }
+    storage.put(&path, &full[..end]).unwrap();
+
+    m.drop_database(&db).unwrap();
+
+    let err = leafmask::cli::run(Cli::parse_from([
+        "leafmask", "--config", &config, "restore", &dump_id,
+    ]))
+    .expect_err("restore must fail on a truncated dump");
+    let msg = err.to_string();
+    assert!(
+        msg.contains(&format!("{db}.users")),
+        "error must name the failed collection, got: {msg}"
+    );
+
+    m.drop_database(&db).unwrap();
+}

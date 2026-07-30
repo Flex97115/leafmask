@@ -1,0 +1,88 @@
+name: Claude Code Review
+
+# Automated review on every pull request. This complements ci.yml rather than
+# duplicating it: CI proves the code *runs* (lint, tests, the MongoDB version
+# matrix, coverage), while this pass reviews the things a test suite cannot
+# assert — whether a change is tested at the right layer, whether it weakens an
+# invariant, whether an error path silently swallows a failure.
+#
+# Requires an ANTHROPIC_API_KEY repository secret. Without it the job is
+# skipped rather than failed, so forks and contributors without access to the
+# secret do not see a permanently red check.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    # Secrets are unavailable to pull requests from forks, and skipping beats
+    # a red check nobody can fix.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # The review needs the merge base to diff against.
+          fetch-depth: 0
+
+      - name: Claude review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Review this pull request against the repository's own rules.
+
+            Read CLAUDE.md first — especially the "Testing policy" section — and
+            hold the diff to it. Leafmask writes anonymized copies of production
+            data and restores them into live databases, so weight findings by
+            data-safety impact, not by style.
+
+            Prioritise, in order:
+
+            1. Silent data loss or silent data exposure. Anything that can make
+               a dump or restore report success while producing an incomplete
+               result, or that can let unmasked data reach a dump: an ignored
+               error, a swallowed `Result`, a config key that is accepted but
+               never read, a count or checksum that is recorded but never
+               verified.
+            2. Determinism. Transformers must derive output purely from
+               `SHA-256(salt || input)` — no RNG, no clock, no shared mutable
+               state, no iteration-order dependence. Same input must give the
+               same output across runs, machines, and `--jobs` worker threads.
+            3. Test layer. Anything touching `MongoDriver`, a `Storage` backend,
+               or the on-disk dump format needs an integration test, not just a
+               unit test against `InMemoryMongo`. Server-behaviour assertions
+               (error codes, catalog shapes, BSON fidelity) belong in
+               `tests/mongo_version_matrix.rs` so every supported MongoDB
+               release is covered. Flag tests that are weaker than their name
+               claims, or that could pass while the behaviour they describe is
+               broken.
+            4. Overflow and panics on the document path. Release builds have
+               overflow checks off, so a wrapping `+` corrupts a dump silently
+               instead of panicking. A panic inside a dump worker aborts the
+               run mid-stream and leaves a partial dump; prefer a returned
+               `Err` that is attributable to a field.
+            5. The supported-MongoDB list must stay consistent across
+               `SUPPORTED_SERVER_VERSIONS` in tests/support/mod.rs, the
+               `integration` matrix in .github/workflows/ci.yml, and
+               `DEFAULT_VERSIONS` in scripts/test-mongo-matrix.sh.
+
+            Report only what you can point at in the diff, with a file:line and
+            a concrete failure scenario — the input or state that triggers it
+            and the wrong result it produces. Do not restate what the code
+            does, do not suggest formatting changes (clippy and rustfmt already
+            gate those in CI), and do not pad the review with praise. If you
+            find nothing that matters, say so in one line.
+          claude_args: |
+            --max-turns 25
