@@ -27,7 +27,7 @@ use leafmask::restore::{ErrorExclusions, Restore, RestoreOptions};
 use leafmask::storage::DirectoryStorage;
 use leafmask::transform::{apply::TransformationPlan, Registry};
 use leafmask::validate::IndexSpec;
-use support::{connect, db_name, uri};
+use support::{connect, db_name, uri, TestDb};
 
 fn user(id: i64, email: &str) -> Document {
     doc! { "_id": id, "email": email }
@@ -658,8 +658,9 @@ fn restore_command_fails_when_a_dump_is_truncated() {
     use leafmask::cli::Cli;
     use leafmask::storage::Storage;
 
-    let m = connect();
-    let db = db_name("cli_truncated");
+    let test_db = TestDb::new("cli_truncated");
+    let m = test_db.driver();
+    let db = test_db.name.clone();
     m.ensure_collection(&db, "users", &None, &BTreeMap::new())
         .unwrap();
     for i in 1..=5 {
@@ -710,6 +711,8 @@ fn restore_command_fails_when_a_dump_is_truncated() {
     }
     storage.put(&path, &full[..end]).unwrap();
 
+    // Restore into an empty target, so what lands there comes only from the
+    // truncated blob. `TestDb` drops the database again at end of scope.
     m.drop_database(&db).unwrap();
 
     let err = leafmask::cli::run(Cli::parse_from([
@@ -721,6 +724,4 @@ fn restore_command_fails_when_a_dump_is_truncated() {
         msg.contains(&format!("{db}.users")),
         "error must name the failed collection, got: {msg}"
     );
-
-    m.drop_database(&db).unwrap();
 }
