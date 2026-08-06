@@ -46,6 +46,10 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Without this the review is written to the job log and nowhere else:
+          # it is what creates the PR comment and wires up the tools to write
+          # the findings into it.
+          track_progress: true
           prompt: |
             Review this pull request against the repository's own rules.
 
