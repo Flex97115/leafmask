@@ -6,9 +6,9 @@ name: Claude Code Review
 # assert — whether a change is tested at the right layer, whether it weakens an
 # invariant, whether an error path silently swallows a failure.
 #
-# Requires an ANTHROPIC_API_KEY repository secret. Without it the job is
-# skipped rather than failed, so forks and contributors without access to the
-# secret do not see a permanently red check.
+# Requires a CLAUDE_CODE_OAUTH_TOKEN repository secret. Without it the steps
+# are skipped rather than failed, so forks and contributors without access to
+# the secret do not see a permanently red check.
 
 on:
   pull_request:
@@ -24,6 +24,10 @@ jobs:
     # Secrets are unavailable to pull requests from forks, and skipping beats
     # a red check nobody can fix.
     if: github.event.pull_request.head.repo.full_name == github.repository
+    # `secrets` is not available in a job-level `if`, but it is in a job-level
+    # `env`, so the presence check has to be carried down to the steps.
+    env:
+      HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
     permissions:
       contents: read
       pull-requests: write
@@ -31,14 +35,16 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v6
+        if: env.HAS_TOKEN == 'true'
         with:
           # The review needs the merge base to diff against.
           fetch-depth: 0
 
       - name: Claude review
+        if: env.HAS_TOKEN == 'true'
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             Review this pull request against the repository's own rules.
