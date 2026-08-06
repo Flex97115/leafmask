@@ -91,4 +91,4 @@ jobs:
             gate those in CI), and do not pad the review with praise. If you
             find nothing that matters, say so in one line.
           claude_args: |
-            --max-turns 25
+            --max-turns 100
