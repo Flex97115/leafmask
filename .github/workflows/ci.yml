@@ -1,9 +1,26 @@
 name: CI
 
+# Paths that cannot change what the code does are skipped, so a prose-only or
+# workflow-only commit does not spend a full matrix run. A commit touching both
+# prose and code still runs: paths-ignore skips only when *every* changed file
+# matches.
+#
+# `docs/` is deliberately NOT ignored. `src/config.rs` pulls
+# `docs/config-example.md` in with `include_str!` and asserts the example still
+# parses — it drifted once and shipped a config nobody could copy — so editing
+# that file has to be able to fail the build.
 on:
   push:
     branches: [main]
+    paths-ignore: &prose
+      - 'README.md'
+      - 'CLAUDE.md'
+      - 'LICENSE'
+      - '.spectial/**'
+      - '.github/workflows/claude-code-review.yml'
+      - '.github/workflows/docs.yml'
   pull_request:
+    paths-ignore: *prose
 
 concurrency:
   group: ci-${{ github.ref }}

@@ -10,24 +10,49 @@ name: Claude Code Review
 # are skipped rather than failed, so forks and contributors without access to
 # the secret do not see a permanently red check.
 
+#
+# Runs once when a pull request is opened, and on demand after that: comment
+# `@claude-review` on the pull request to ask for another pass. `synchronize` is
+# deliberately absent — a review per push is mostly re-reading a diff nobody
+# changed the substance of, and it is billed against the token owner's account.
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, reopened]
+  issue_comment:
+    types: [created]
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   review:
     runs-on: ubuntu-latest
-    # Secrets are unavailable to pull requests from forks, and skipping beats
-    # a red check nobody can fix.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Two ways in, each gated separately.
+    #
+    # `pull_request`: same-repo only. Secrets are unavailable to pull requests
+    # from forks, and skipping beats a red check nobody can fix.
+    #
+    # `issue_comment`: this event runs with the workflow file from the default
+    # branch and *does* get the secrets, whoever commented — so the trigger has
+    # to be restricted to people who already have write access, or any passer-by
+    # on a public repository could spend the token owner's quota at will.
+    if: >-
+      (
+        github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.full_name == github.repository
+      ) || (
+        github.event_name == 'issue_comment'
+        && github.event.issue.pull_request != null
+        && contains(github.event.comment.body, '@claude-review')
+        && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
     # `secrets` is not available in a job-level `if`, but it is in a job-level
     # `env`, so the presence check has to be carried down to the steps.
     env:
       HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+      # `issue_comment` carries the number under `issue`, not `pull_request`.
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
     permissions:
       contents: read
       pull-requests: write
@@ -37,6 +62,10 @@ jobs:
       - uses: actions/checkout@v6
         if: env.HAS_TOKEN == 'true'
         with:
+          # An `issue_comment` run would otherwise check out the default branch
+          # and review a diff that is empty. Naming the merge ref explicitly
+          # gives both triggers the same checkout.
+          ref: refs/pull/${{ env.PR_NUMBER }}/merge
           # The review needs the merge base to diff against.
           fetch-depth: 0
 
